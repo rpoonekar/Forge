@@ -1,0 +1,59 @@
+syntax = "proto3";
+
+package forgepb;
+
+option go_package = "github.com/ronavpoonekar/forge/proto/forgepb";
+
+// To regenerate Go code after modifying this file, run from the forge/ directory:
+//   protoc --go_out=proto/forgepb --go-grpc_out=proto/forgepb \
+//     --go_opt=paths=source_relative --go-grpc_opt=paths=source_relative \
+//     --proto_path=proto proto/forge.proto
+
+// ForgeService defines the gRPC interface between the scheduler and workers.
+//
+// This is the "contract" — it defines exactly what messages can be sent
+// between the scheduler and worker, and what they look like.
+//
+// The scheduler runs the gRPC SERVER (it listens for connections).
+// The worker runs the gRPC CLIENT (it connects to the scheduler).
+
+service ForgeService {
+  // GetTask is called by a worker to request a task to execute.
+  // The worker sends its ID, the scheduler responds with a task (or empty if none available).
+  //
+  // TODO: Implement the server-side handler in scheduler/grpc_server.go
+  // TODO: Implement the client-side call in worker/worker.go
+  rpc GetTask(GetTaskRequest) returns (GetTaskResponse);
+
+  // ReportResult is called by a worker after it finishes executing a task.
+  // The worker sends the task ID, output, and exit code.
+  //
+  // TODO: Implement the server-side handler in scheduler/grpc_server.go
+  // TODO: Implement the client-side call in worker/worker.go
+  rpc ReportResult(ReportResultRequest) returns (ReportResultResponse);
+}
+
+// GetTaskRequest — sent by the worker when asking for work.
+message GetTaskRequest {
+  string worker_id = 1;  // which worker is asking
+}
+
+// GetTaskResponse — sent by the scheduler in response.
+message GetTaskResponse {
+  bool has_task = 1;     // false if the queue is empty (worker should wait and retry)
+  string task_id = 2;
+  string command = 3;
+}
+
+// ReportResultRequest — sent by the worker when a task finishes.
+message ReportResultRequest {
+  string worker_id = 1;
+  string task_id = 2;
+  string output = 3;
+  int32 exit_code = 4;
+}
+
+// ReportResultResponse — acknowledgment from the scheduler.
+message ReportResultResponse {
+  bool ok = 1;
+}
