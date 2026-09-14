@@ -59,7 +59,7 @@ func New(id string, sched *scheduler.Scheduler) *Worker {
 // Later (Stage 5+), this will accept a context.Context for graceful shutdown.
 func (w *Worker) Start() {
 	for {
-		task := w.scheduler.NextTask()
+		task := w.scheduler.NextTask(w.id)
 		if task == nil {
 			time.Sleep(1 * time.Second)
 			continue
@@ -67,7 +67,7 @@ func (w *Worker) Start() {
 
 		cmd := exec.Command("sh", "-c", task.Command)
 		output, err := cmd.CombinedOutput()
-		
+
 		exitCode := 0
 		if err != nil {
 			exitCode = 1

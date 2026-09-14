@@ -95,6 +95,13 @@ func main() {
 		json.NewEncoder(w).Encode(tasks)
 	})
 
+	// Stage 3: new endpoint to see registered workers
+	http.HandleFunc("GET /workers", func(w http.ResponseWriter, r *http.Request) {
+		workers := sched.GetAllWorkers()
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(workers)
+	})
+
 	// 4. Start the HTTP server
 	httpPort := 8080
 	fmt.Printf("HTTP server listening on :%d\n", httpPort)
@@ -102,5 +109,6 @@ func main() {
 	fmt.Println("  POST /submit    — submit a task")
 	fmt.Println("  GET  /task/{id} — get task status")
 	fmt.Println("  GET  /tasks     — list all tasks")
+	fmt.Println("  GET  /workers   — list all workers")
 	log.Fatal(http.ListenAndServe(fmt.Sprintf(":%d", httpPort), nil))
 }

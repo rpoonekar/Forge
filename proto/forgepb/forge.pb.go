@@ -2,7 +2,7 @@
 // versions:
 // 	protoc-gen-go v1.36.12
 // 	protoc        v3.20.3
-// source: proto/forge.proto
+// source: forge.proto
 
 package forgepb
 
@@ -21,17 +21,104 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
-// GetTaskRequest — sent by the worker when asking for work.
+type RegisterWorkerRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	WorkerId      string                 `protobuf:"bytes,1,opt,name=worker_id,json=workerId,proto3" json:"worker_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RegisterWorkerRequest) Reset() {
+	*x = RegisterWorkerRequest{}
+	mi := &file_forge_proto_msgTypes[0]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RegisterWorkerRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RegisterWorkerRequest) ProtoMessage() {}
+
+func (x *RegisterWorkerRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_forge_proto_msgTypes[0]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RegisterWorkerRequest.ProtoReflect.Descriptor instead.
+func (*RegisterWorkerRequest) Descriptor() ([]byte, []int) {
+	return file_forge_proto_rawDescGZIP(), []int{0}
+}
+
+func (x *RegisterWorkerRequest) GetWorkerId() string {
+	if x != nil {
+		return x.WorkerId
+	}
+	return ""
+}
+
+type RegisterWorkerResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Ok            bool                   `protobuf:"varint,1,opt,name=ok,proto3" json:"ok,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RegisterWorkerResponse) Reset() {
+	*x = RegisterWorkerResponse{}
+	mi := &file_forge_proto_msgTypes[1]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RegisterWorkerResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RegisterWorkerResponse) ProtoMessage() {}
+
+func (x *RegisterWorkerResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_forge_proto_msgTypes[1]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RegisterWorkerResponse.ProtoReflect.Descriptor instead.
+func (*RegisterWorkerResponse) Descriptor() ([]byte, []int) {
+	return file_forge_proto_rawDescGZIP(), []int{1}
+}
+
+func (x *RegisterWorkerResponse) GetOk() bool {
+	if x != nil {
+		return x.Ok
+	}
+	return false
+}
+
 type GetTaskRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	WorkerId      string                 `protobuf:"bytes,1,opt,name=worker_id,json=workerId,proto3" json:"worker_id,omitempty"` // which worker is asking
+	WorkerId      string                 `protobuf:"bytes,1,opt,name=worker_id,json=workerId,proto3" json:"worker_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *GetTaskRequest) Reset() {
 	*x = GetTaskRequest{}
-	mi := &file_proto_forge_proto_msgTypes[0]
+	mi := &file_forge_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -43,7 +130,7 @@ func (x *GetTaskRequest) String() string {
 func (*GetTaskRequest) ProtoMessage() {}
 
 func (x *GetTaskRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_forge_proto_msgTypes[0]
+	mi := &file_forge_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -56,7 +143,7 @@ func (x *GetTaskRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetTaskRequest.ProtoReflect.Descriptor instead.
 func (*GetTaskRequest) Descriptor() ([]byte, []int) {
-	return file_proto_forge_proto_rawDescGZIP(), []int{0}
+	return file_forge_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *GetTaskRequest) GetWorkerId() string {
@@ -66,10 +153,9 @@ func (x *GetTaskRequest) GetWorkerId() string {
 	return ""
 }
 
-// GetTaskResponse — sent by the scheduler in response.
 type GetTaskResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	HasTask       bool                   `protobuf:"varint,1,opt,name=has_task,json=hasTask,proto3" json:"has_task,omitempty"` // false if the queue is empty (worker should wait and retry)
+	HasTask       bool                   `protobuf:"varint,1,opt,name=has_task,json=hasTask,proto3" json:"has_task,omitempty"`
 	TaskId        string                 `protobuf:"bytes,2,opt,name=task_id,json=taskId,proto3" json:"task_id,omitempty"`
 	Command       string                 `protobuf:"bytes,3,opt,name=command,proto3" json:"command,omitempty"`
 	unknownFields protoimpl.UnknownFields
@@ -78,7 +164,7 @@ type GetTaskResponse struct {
 
 func (x *GetTaskResponse) Reset() {
 	*x = GetTaskResponse{}
-	mi := &file_proto_forge_proto_msgTypes[1]
+	mi := &file_forge_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -90,7 +176,7 @@ func (x *GetTaskResponse) String() string {
 func (*GetTaskResponse) ProtoMessage() {}
 
 func (x *GetTaskResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_forge_proto_msgTypes[1]
+	mi := &file_forge_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -103,7 +189,7 @@ func (x *GetTaskResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetTaskResponse.ProtoReflect.Descriptor instead.
 func (*GetTaskResponse) Descriptor() ([]byte, []int) {
-	return file_proto_forge_proto_rawDescGZIP(), []int{1}
+	return file_forge_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *GetTaskResponse) GetHasTask() bool {
@@ -127,7 +213,6 @@ func (x *GetTaskResponse) GetCommand() string {
 	return ""
 }
 
-// ReportResultRequest — sent by the worker when a task finishes.
 type ReportResultRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	WorkerId      string                 `protobuf:"bytes,1,opt,name=worker_id,json=workerId,proto3" json:"worker_id,omitempty"`
@@ -140,7 +225,7 @@ type ReportResultRequest struct {
 
 func (x *ReportResultRequest) Reset() {
 	*x = ReportResultRequest{}
-	mi := &file_proto_forge_proto_msgTypes[2]
+	mi := &file_forge_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -152,7 +237,7 @@ func (x *ReportResultRequest) String() string {
 func (*ReportResultRequest) ProtoMessage() {}
 
 func (x *ReportResultRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_forge_proto_msgTypes[2]
+	mi := &file_forge_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -165,7 +250,7 @@ func (x *ReportResultRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReportResultRequest.ProtoReflect.Descriptor instead.
 func (*ReportResultRequest) Descriptor() ([]byte, []int) {
-	return file_proto_forge_proto_rawDescGZIP(), []int{2}
+	return file_forge_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *ReportResultRequest) GetWorkerId() string {
@@ -196,7 +281,6 @@ func (x *ReportResultRequest) GetExitCode() int32 {
 	return 0
 }
 
-// ReportResultResponse — acknowledgment from the scheduler.
 type ReportResultResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Ok            bool                   `protobuf:"varint,1,opt,name=ok,proto3" json:"ok,omitempty"`
@@ -206,7 +290,7 @@ type ReportResultResponse struct {
 
 func (x *ReportResultResponse) Reset() {
 	*x = ReportResultResponse{}
-	mi := &file_proto_forge_proto_msgTypes[3]
+	mi := &file_forge_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -218,7 +302,7 @@ func (x *ReportResultResponse) String() string {
 func (*ReportResultResponse) ProtoMessage() {}
 
 func (x *ReportResultResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_forge_proto_msgTypes[3]
+	mi := &file_forge_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -231,7 +315,7 @@ func (x *ReportResultResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReportResultResponse.ProtoReflect.Descriptor instead.
 func (*ReportResultResponse) Descriptor() ([]byte, []int) {
-	return file_proto_forge_proto_rawDescGZIP(), []int{3}
+	return file_forge_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *ReportResultResponse) GetOk() bool {
@@ -241,11 +325,15 @@ func (x *ReportResultResponse) GetOk() bool {
 	return false
 }
 
-var File_proto_forge_proto protoreflect.FileDescriptor
+var File_forge_proto protoreflect.FileDescriptor
 
-const file_proto_forge_proto_rawDesc = "" +
+const file_forge_proto_rawDesc = "" +
 	"\n" +
-	"\x11proto/forge.proto\x12\aforgepb\"-\n" +
+	"\vforge.proto\x12\aforgepb\"4\n" +
+	"\x15RegisterWorkerRequest\x12\x1b\n" +
+	"\tworker_id\x18\x01 \x01(\tR\bworkerId\"(\n" +
+	"\x16RegisterWorkerResponse\x12\x0e\n" +
+	"\x02ok\x18\x01 \x01(\bR\x02ok\"-\n" +
 	"\x0eGetTaskRequest\x12\x1b\n" +
 	"\tworker_id\x18\x01 \x01(\tR\bworkerId\"_\n" +
 	"\x0fGetTaskResponse\x12\x19\n" +
@@ -258,62 +346,67 @@ const file_proto_forge_proto_rawDesc = "" +
 	"\x06output\x18\x03 \x01(\tR\x06output\x12\x1b\n" +
 	"\texit_code\x18\x04 \x01(\x05R\bexitCode\"&\n" +
 	"\x14ReportResultResponse\x12\x0e\n" +
-	"\x02ok\x18\x01 \x01(\bR\x02ok2\x99\x01\n" +
-	"\fForgeService\x12<\n" +
+	"\x02ok\x18\x01 \x01(\bR\x02ok2\xec\x01\n" +
+	"\fForgeService\x12Q\n" +
+	"\x0eRegisterWorker\x12\x1e.forgepb.RegisterWorkerRequest\x1a\x1f.forgepb.RegisterWorkerResponse\x12<\n" +
 	"\aGetTask\x12\x17.forgepb.GetTaskRequest\x1a\x18.forgepb.GetTaskResponse\x12K\n" +
 	"\fReportResult\x12\x1c.forgepb.ReportResultRequest\x1a\x1d.forgepb.ReportResultResponseB.Z,github.com/ronavpoonekar/forge/proto/forgepbb\x06proto3"
 
 var (
-	file_proto_forge_proto_rawDescOnce sync.Once
-	file_proto_forge_proto_rawDescData []byte
+	file_forge_proto_rawDescOnce sync.Once
+	file_forge_proto_rawDescData []byte
 )
 
-func file_proto_forge_proto_rawDescGZIP() []byte {
-	file_proto_forge_proto_rawDescOnce.Do(func() {
-		file_proto_forge_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_proto_forge_proto_rawDesc), len(file_proto_forge_proto_rawDesc)))
+func file_forge_proto_rawDescGZIP() []byte {
+	file_forge_proto_rawDescOnce.Do(func() {
+		file_forge_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_forge_proto_rawDesc), len(file_forge_proto_rawDesc)))
 	})
-	return file_proto_forge_proto_rawDescData
+	return file_forge_proto_rawDescData
 }
 
-var file_proto_forge_proto_msgTypes = make([]protoimpl.MessageInfo, 4)
-var file_proto_forge_proto_goTypes = []any{
-	(*GetTaskRequest)(nil),       // 0: forgepb.GetTaskRequest
-	(*GetTaskResponse)(nil),      // 1: forgepb.GetTaskResponse
-	(*ReportResultRequest)(nil),  // 2: forgepb.ReportResultRequest
-	(*ReportResultResponse)(nil), // 3: forgepb.ReportResultResponse
+var file_forge_proto_msgTypes = make([]protoimpl.MessageInfo, 6)
+var file_forge_proto_goTypes = []any{
+	(*RegisterWorkerRequest)(nil),  // 0: forgepb.RegisterWorkerRequest
+	(*RegisterWorkerResponse)(nil), // 1: forgepb.RegisterWorkerResponse
+	(*GetTaskRequest)(nil),         // 2: forgepb.GetTaskRequest
+	(*GetTaskResponse)(nil),        // 3: forgepb.GetTaskResponse
+	(*ReportResultRequest)(nil),    // 4: forgepb.ReportResultRequest
+	(*ReportResultResponse)(nil),   // 5: forgepb.ReportResultResponse
 }
-var file_proto_forge_proto_depIdxs = []int32{
-	0, // 0: forgepb.ForgeService.GetTask:input_type -> forgepb.GetTaskRequest
-	2, // 1: forgepb.ForgeService.ReportResult:input_type -> forgepb.ReportResultRequest
-	1, // 2: forgepb.ForgeService.GetTask:output_type -> forgepb.GetTaskResponse
-	3, // 3: forgepb.ForgeService.ReportResult:output_type -> forgepb.ReportResultResponse
-	2, // [2:4] is the sub-list for method output_type
-	0, // [0:2] is the sub-list for method input_type
+var file_forge_proto_depIdxs = []int32{
+	0, // 0: forgepb.ForgeService.RegisterWorker:input_type -> forgepb.RegisterWorkerRequest
+	2, // 1: forgepb.ForgeService.GetTask:input_type -> forgepb.GetTaskRequest
+	4, // 2: forgepb.ForgeService.ReportResult:input_type -> forgepb.ReportResultRequest
+	1, // 3: forgepb.ForgeService.RegisterWorker:output_type -> forgepb.RegisterWorkerResponse
+	3, // 4: forgepb.ForgeService.GetTask:output_type -> forgepb.GetTaskResponse
+	5, // 5: forgepb.ForgeService.ReportResult:output_type -> forgepb.ReportResultResponse
+	3, // [3:6] is the sub-list for method output_type
+	0, // [0:3] is the sub-list for method input_type
 	0, // [0:0] is the sub-list for extension type_name
 	0, // [0:0] is the sub-list for extension extendee
 	0, // [0:0] is the sub-list for field type_name
 }
 
-func init() { file_proto_forge_proto_init() }
-func file_proto_forge_proto_init() {
-	if File_proto_forge_proto != nil {
+func init() { file_forge_proto_init() }
+func file_forge_proto_init() {
+	if File_forge_proto != nil {
 		return
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
-			RawDescriptor: unsafe.Slice(unsafe.StringData(file_proto_forge_proto_rawDesc), len(file_proto_forge_proto_rawDesc)),
+			RawDescriptor: unsafe.Slice(unsafe.StringData(file_forge_proto_rawDesc), len(file_forge_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   4,
+			NumMessages:   6,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
-		GoTypes:           file_proto_forge_proto_goTypes,
-		DependencyIndexes: file_proto_forge_proto_depIdxs,
-		MessageInfos:      file_proto_forge_proto_msgTypes,
+		GoTypes:           file_forge_proto_goTypes,
+		DependencyIndexes: file_forge_proto_depIdxs,
+		MessageInfos:      file_forge_proto_msgTypes,
 	}.Build()
-	File_proto_forge_proto = out.File
-	file_proto_forge_proto_goTypes = nil
-	file_proto_forge_proto_depIdxs = nil
+	File_forge_proto = out.File
+	file_forge_proto_goTypes = nil
+	file_forge_proto_depIdxs = nil
 }

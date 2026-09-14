@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"log"
 	"os/exec"
@@ -14,89 +15,88 @@ import (
 )
 
 func main() {
-	// The worker is now a SEPARATE binary that connects to the scheduler over gRPC.
+	// Stage 3: worker ID is now a CLI flag so you can run multiple workers
 	//
-	// Compare this to Stage 1's worker:
-	//   Stage 1: w.scheduler.NextTask()       — direct function call, same process
-	//   Stage 2: client.GetTask(ctx, &req)     — gRPC call, over the network
+	// Usage:
+	//   go run ./cmd/worker --id worker-1
+	//   go run ./cmd/worker --id worker-2
+	//   go run ./cmd/worker --id worker-3
 	//
-	// The worker loop logic (get task → execute → report) is the SAME.
-	// Only HOW it talks to the scheduler changes.
+	// flag.String defines a --id flag with a default value.
+	// flag.Parse() reads the actual command-line arguments.
 
-	workerID := "worker-1" // TODO: you could make this a CLI flag later
+	workerID := flag.String("id", "worker-1", "unique ID for this worker")
+	schedulerAddr := flag.String("addr", "localhost:50051", "scheduler gRPC address")
+	flag.Parse()
 
 	// 1. Connect to the scheduler's gRPC server
-	schedulerAddr := "localhost:50051"
-	conn, err := grpc.NewClient(schedulerAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	conn, err := grpc.NewClient(*schedulerAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
-		log.Fatalf("Failed to connect to scheduler at %s: %v", schedulerAddr, err)
+		log.Fatalf("Failed to connect to scheduler at %s: %v", *schedulerAddr, err)
 	}
 	defer conn.Close()
 
-	// Create a gRPC client from the connection
 	client := forgepb.NewForgeServiceClient(conn)
 
-	fmt.Printf("Worker %s connected to scheduler at %s\n", workerID, schedulerAddr)
+	// 2. Register this worker with the scheduler
+	//
+	// TODO (Step 6): Call client.RegisterWorker() here
+	//
+	// This tells the scheduler "I exist, I'm ready for work."
+	// Steps:
+	//   1. Call client.RegisterWorker(context.Background(), &forgepb.RegisterWorkerRequest{WorkerId: *workerID})
+	//   2. Check for error
+	//   3. Log success
+	//
+	// If registration fails, the worker should exit (log.Fatalf).
 
-	// 2. Worker loop — same logic as Stage 1, but over gRPC
-	//
-	// TODO (Step 5): Implement the worker loop
-	//
-	// The loop should:
-	//   a) Call client.GetTask() with a GetTaskRequest containing the worker ID
-	//   b) If response.HasTask is false, sleep and retry
-	//   c) If response.HasTask is true:
-	//      - Execute the command with exec.Command("sh", "-c", response.Command)
-	//      - Capture output and exit code (same as Stage 1)
-	//      - Call client.ReportResult() with the task ID, output, and exit code
-	//   d) Repeat forever
-	//
-	// For gRPC calls, you need a context:
-	//   ctx := context.Background()
-	//   resp, err := client.GetTask(ctx, &forgepb.GetTaskRequest{WorkerId: workerID})
-	//
-	// Hint: your Stage 1 worker.Start() had this exact logic — just swap
-	// the direct scheduler calls for gRPC client calls.
+	response, err := client.RegisterWorker(context.Background(), &forgepb.RegisterWorkerRequest{WorkerId: *workerID})
+	if err != nil || !response.Ok {
+		log.Fatalf("Failed to register worker to scheduler at %s: %v", *schedulerAddr, err)
+	}
 
+	fmt.Printf("Worker %s connected to scheduler at %s\n", *workerID, *schedulerAddr)
+
+	// 3. Worker loop — same as Stage 2
 	for {
 		response, err := client.GetTask(context.Background(), &forgepb.GetTaskRequest{
-			WorkerId: workerID,
+			WorkerId: *workerID,
 		})
 
 		if err != nil {
-			log.Printf("Failed to get task: %v", err)
+			log.Printf("[%s] Failed to get task: %v", *workerID, err)
 			time.Sleep(1 * time.Second)
 			continue
 		}
-		if response.HasTask == false {
+		if !response.HasTask {
 			time.Sleep(1 * time.Second)
 			continue
 		}
 
+		log.Printf("[%s] Executing task %s: %s", *workerID, response.TaskId, response.Command)
+
 		cmd := exec.Command("sh", "-c", response.Command)
 		output, err := cmd.CombinedOutput()
-		
+
 		exitCode := 0
 		if err != nil {
 			exitCode = 1
-			// If process actually ran, get the real exit code
 			if cmd.ProcessState != nil {
 				exitCode = cmd.ProcessState.ExitCode()
 			}
 		}
 
-		result := &forgepb.ReportResultRequest{
-			WorkerId: workerID,
-			TaskId: response.TaskId,
-			Output: string(output),
-			ExitCode: int32(exitCode),
-		}
+		log.Printf("[%s] Task %s finished (exit code: %d)", *workerID, response.TaskId, exitCode)
 
-		client.ReportResult(context.Background(), result)
+		_, err = client.ReportResult(context.Background(), &forgepb.ReportResultRequest{
+			WorkerId: *workerID,
+			TaskId:   response.TaskId,
+			Output:   string(output),
+			ExitCode: int32(exitCode),
+		})
 
 		if err != nil {
-			log.Printf("Failed to report result: %v", err)
+			log.Printf("[%s] Failed to report result: %v", *workerID, err)
 		}
 	}
-
 }

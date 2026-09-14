@@ -3,56 +3,69 @@ package scheduler
 import (
 	"sync"
 	"time"
+
 	"github.com/google/uuid"
 	"github.com/ronavpoonekar/forge/model"
 )
 
-// Scheduler manages the task queue and assigns work.
-//
-// For Stage 1, it's simple:
-//   - Maintains an in-memory queue of tasks
-//   - Provides a way to submit new tasks
-//   - Provides a way for the worker to grab the next available task
-//   - Updates task status as tasks move through their lifecycle
-//
-// Think about:
-//   - What data structure should the queue be? (slice? channel? map?)
-//   - How do you generate unique task IDs?
-//   - What happens if someone calls NextTask() and the queue is empty?
-//   - This will need to be safe for concurrent access (mutex) — even in
-//     Stage 1 since the HTTP handler and worker run in separate goroutines.
+// Scheduler manages the task queue, assigns work, and tracks workers.
 type Scheduler struct {
-	mu    sync.Mutex
-	tasks map[string]*model.Task // all tasks by ID
-	queue []string               // IDs of tasks waiting to be picked up
-
-	// TODO: You might want a channel here instead of (or in addition to)
-	// the slice-based queue. Think about the tradeoffs:
-	//   - Channel: worker can block waiting for work (no polling needed)
-	//   - Slice + mutex: more control, but worker needs to poll or be notified
+	mu      sync.Mutex
+	tasks   map[string]*model.Task   // all tasks by ID
+	queue   []string                 // IDs of tasks waiting to be picked up
+	workers map[string]*model.Worker // all registered workers by ID
 }
 
 func GenerateID() string {
-    return uuid.NewString()
+	return uuid.NewString()
 }
 
 // New creates a new Scheduler.
 func New() *Scheduler {
 	return &Scheduler{
-		tasks: make(map[string]*model.Task),
-		queue: []string{},
+		tasks:   make(map[string]*model.Task),
+		queue:   []string{},
+		workers: make(map[string]*model.Worker),
 	}
 }
 
-// Submit adds a new task to the queue.
-// It should:
-//  1. Create a Task with a unique ID, the given command, and status QUEUED
-//  2. Store it in the tasks map
-//  3. Add its ID to the queue
-//  4. Return the created task
+// RegisterWorker adds a worker to the scheduler's registry (or updates LastSeen
+// if already registered).
 //
-// Remember: this will be called from the HTTP handler goroutine, while the
-// worker is running in another goroutine. You need synchronization.
+// This is called when a worker first connects via the RegisterWorker RPC.
+// The scheduler needs to know which workers exist so it can:
+//   - Show the worker pool in the dashboard (Stage 9)
+//   - Detect dead workers via heartbeat timeout (Stage 5)
+//   - Report stats (how many workers, what they're doing)
+//
+// TODO (Step 1): Implement this method
+//
+// Steps:
+//  1. Lock the mutex
+//  2. Check if a worker with this ID already exists in s.workers
+//  3. If not, create a new model.Worker with status IDLE, RegisteredAt = now, LastSeen = now
+//  4. If yes, just update its LastSeen time
+//  5. Store it in the map and return it
+func (s *Scheduler) RegisterWorker(workerID string) *model.Worker {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	worker, ok := s.workers[workerID]
+	if ok {
+		worker.LastSeen = time.Now()
+	} else {
+		worker = &model.Worker{
+			ID: workerID,
+			Status: model.WorkerStatusIdle,
+			RegisteredAt: time.Now(),
+			LastSeen : time.Now(),
+		}
+		s.workers[workerID] = worker
+	}
+	return worker
+}
+
+// Submit adds a new task to the queue.
 func (s *Scheduler) Submit(command string) *model.Task {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -60,9 +73,9 @@ func (s *Scheduler) Submit(command string) *model.Task {
 	id := GenerateID()
 
 	task := &model.Task{
-		ID: id,
-		Command: command,
-		Status: model.StatusQueued,
+		ID:        id,
+		Command:   command,
+		Status:    model.StatusQueued,
 		CreatedAt: time.Now(),
 	}
 
@@ -71,37 +84,65 @@ func (s *Scheduler) Submit(command string) *model.Task {
 	return task
 }
 
-// NextTask returns the next task from the queue for a worker to execute.
-// It should:
-//  1. Check if the queue has any tasks
-//  2. If yes: remove the first task from the queue, set its status to RUNNING,
-//     record the start time, and return it
-//  3. If no: return nil (nothing to do right now)
+// NextTask returns the next task from the queue for a specific worker.
 //
-// The worker will call this in a loop.
-func (s *Scheduler) NextTask() *model.Task {
+// Stage 3 change: now takes a workerID parameter so we can record which
+// worker is running each task and update the worker's status to BUSY.
+//
+// TODO (Step 2): Modify this method
+//
+// Your existing queue logic (pop from front, set RUNNING, etc.) stays the same.
+// Add these new steps after popping the task:
+//  1. Set task.WorkerID = workerID
+//  2. Look up the worker in s.workers
+//  3. Set worker.Status = BUSY
+//  4. Set worker.CurrentTask = task.ID
+//  5. Update worker.LastSeen
+//
+// Also: when the queue is empty, still update the worker's LastSeen
+// (so we know it's alive and polling even when there's no work).
+func (s *Scheduler) NextTask(workerID string) *model.Task {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	if len(s.queue) == 0 {
+		// No work, but update LastSeen so we know this worker is alive
+		if w, ok := s.workers[workerID]; ok {
+			w.LastSeen = time.Now()
+		}
 		return nil
 	}
+
 	id := s.queue[0]
 	task := s.tasks[id]
 
 	task.StartedAt = time.Now()
 	task.Status = model.StatusRunning
-	
+	task.WorkerID = workerID
+
 	s.queue = s.queue[1:]
+
+	worker := s.workers[workerID]
+
+	worker.CurrentTask = task.ID
+	worker.LastSeen = time.Now()
+	worker.Status = model.WorkerStatusBusy
+
 	return task
 }
 
 // CompleteTask is called by the worker when it finishes executing a task.
-// It should:
-//  1. Look up the task by ID
-//  2. Update its status to SUCCEEDED or FAILED based on the exit code
-//  3. Store the output and exit code
-//  4. Record the end time
+//
+// Stage 3 change: also updates the worker's state back to IDLE.
+//
+// TODO (Step 3): Add worker state update
+//
+// After your existing logic (set status, output, exit code, end time), add:
+//  1. Look up the worker by task.WorkerID in s.workers
+//  2. Set worker.Status = IDLE
+//  3. Set worker.CurrentTask = ""
+//  4. Increment worker.TasksRun
+//  5. Update worker.LastSeen
 func (s *Scheduler) CompleteTask(taskID string, output string, exitCode int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -117,9 +158,16 @@ func (s *Scheduler) CompleteTask(taskID string, output string, exitCode int) {
 	task.Output = output
 	task.ExitCode = exitCode
 	task.EndedAt = time.Now()
+
+	worker := s.workers[task.WorkerID]
+
+	worker.LastSeen = time.Now()
+	worker.CurrentTask = ""
+	worker.Status = model.WorkerStatusIdle
+	worker.TasksRun++
 }
 
-// GetTask returns a task by its ID (for the HTTP API to query status).
+// GetTask returns a task by its ID (for the HTTP API).
 func (s *Scheduler) GetTask(id string) *model.Task {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -127,16 +175,30 @@ func (s *Scheduler) GetTask(id string) *model.Task {
 	return s.tasks[id]
 }
 
-// GetAllTasks returns all tasks (for the HTTP API to list them).
+// GetAllTasks returns all tasks (for the HTTP API).
 func (s *Scheduler) GetAllTasks() []*model.Task {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	allTasks := []*model.Task{}
-
 	for _, task := range s.tasks {
 		allTasks = append(allTasks, task)
 	}
-
 	return allTasks
+}
+
+// GetAllWorkers returns all registered workers (for the HTTP API).
+//
+// TODO (Step 4): Implement this method
+//
+// Same pattern as GetAllTasks — lock mutex, iterate s.workers map, return a slice.
+func (s *Scheduler) GetAllWorkers() []*model.Worker {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	allWorkers := []*model.Worker{}
+	for _, worker := range s.workers {
+		allWorkers = append(allWorkers, worker)
+	}
+	return allWorkers
 }

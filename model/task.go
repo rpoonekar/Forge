@@ -20,6 +20,7 @@ type Task struct {
 	ID        string
 	Command   string
 	Status    Status
+	WorkerID  string // which worker is running (or ran) this task
 	CreatedAt time.Time
 	StartedAt time.Time
 	EndedAt   time.Time

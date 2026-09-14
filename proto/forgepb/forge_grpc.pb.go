@@ -2,7 +2,7 @@
 // versions:
 // - protoc-gen-go-grpc v1.6.2
 // - protoc             v3.20.3
-// source: proto/forge.proto
+// source: forge.proto
 
 package forgepb
 
@@ -19,25 +19,22 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	ForgeService_GetTask_FullMethodName      = "/forgepb.ForgeService/GetTask"
-	ForgeService_ReportResult_FullMethodName = "/forgepb.ForgeService/ReportResult"
+	ForgeService_RegisterWorker_FullMethodName = "/forgepb.ForgeService/RegisterWorker"
+	ForgeService_GetTask_FullMethodName        = "/forgepb.ForgeService/GetTask"
+	ForgeService_ReportResult_FullMethodName   = "/forgepb.ForgeService/ReportResult"
 )
 
 // ForgeServiceClient is the client API for ForgeService service.
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type ForgeServiceClient interface {
+	// RegisterWorker is called once when a worker starts up.
+	// The scheduler records the worker in its registry.
+	// Stage 3: NEW RPC
+	RegisterWorker(ctx context.Context, in *RegisterWorkerRequest, opts ...grpc.CallOption) (*RegisterWorkerResponse, error)
 	// GetTask is called by a worker to request a task to execute.
-	// The worker sends its ID, the scheduler responds with a task (or empty if none available).
-	//
-	// TODO: Implement the server-side handler in scheduler/grpc_server.go
-	// TODO: Implement the client-side call in worker/worker.go
 	GetTask(ctx context.Context, in *GetTaskRequest, opts ...grpc.CallOption) (*GetTaskResponse, error)
 	// ReportResult is called by a worker after it finishes executing a task.
-	// The worker sends the task ID, output, and exit code.
-	//
-	// TODO: Implement the server-side handler in scheduler/grpc_server.go
-	// TODO: Implement the client-side call in worker/worker.go
 	ReportResult(ctx context.Context, in *ReportResultRequest, opts ...grpc.CallOption) (*ReportResultResponse, error)
 }
 
@@ -47,6 +44,16 @@ type forgeServiceClient struct {
 
 func NewForgeServiceClient(cc grpc.ClientConnInterface) ForgeServiceClient {
 	return &forgeServiceClient{cc}
+}
+
+func (c *forgeServiceClient) RegisterWorker(ctx context.Context, in *RegisterWorkerRequest, opts ...grpc.CallOption) (*RegisterWorkerResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RegisterWorkerResponse)
+	err := c.cc.Invoke(ctx, ForgeService_RegisterWorker_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func (c *forgeServiceClient) GetTask(ctx context.Context, in *GetTaskRequest, opts ...grpc.CallOption) (*GetTaskResponse, error) {
@@ -73,17 +80,13 @@ func (c *forgeServiceClient) ReportResult(ctx context.Context, in *ReportResultR
 // All implementations must embed UnimplementedForgeServiceServer
 // for forward compatibility.
 type ForgeServiceServer interface {
+	// RegisterWorker is called once when a worker starts up.
+	// The scheduler records the worker in its registry.
+	// Stage 3: NEW RPC
+	RegisterWorker(context.Context, *RegisterWorkerRequest) (*RegisterWorkerResponse, error)
 	// GetTask is called by a worker to request a task to execute.
-	// The worker sends its ID, the scheduler responds with a task (or empty if none available).
-	//
-	// TODO: Implement the server-side handler in scheduler/grpc_server.go
-	// TODO: Implement the client-side call in worker/worker.go
 	GetTask(context.Context, *GetTaskRequest) (*GetTaskResponse, error)
 	// ReportResult is called by a worker after it finishes executing a task.
-	// The worker sends the task ID, output, and exit code.
-	//
-	// TODO: Implement the server-side handler in scheduler/grpc_server.go
-	// TODO: Implement the client-side call in worker/worker.go
 	ReportResult(context.Context, *ReportResultRequest) (*ReportResultResponse, error)
 	mustEmbedUnimplementedForgeServiceServer()
 }
@@ -95,6 +98,9 @@ type ForgeServiceServer interface {
 // pointer dereference when methods are called.
 type UnimplementedForgeServiceServer struct{}
 
+func (UnimplementedForgeServiceServer) RegisterWorker(context.Context, *RegisterWorkerRequest) (*RegisterWorkerResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method RegisterWorker not implemented")
+}
 func (UnimplementedForgeServiceServer) GetTask(context.Context, *GetTaskRequest) (*GetTaskResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetTask not implemented")
 }
@@ -120,6 +126,24 @@ func RegisterForgeServiceServer(s grpc.ServiceRegistrar, srv ForgeServiceServer)
 		t.testEmbeddedByValue()
 	}
 	s.RegisterService(&ForgeService_ServiceDesc, srv)
+}
+
+func _ForgeService_RegisterWorker_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RegisterWorkerRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ForgeServiceServer).RegisterWorker(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ForgeService_RegisterWorker_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ForgeServiceServer).RegisterWorker(ctx, req.(*RegisterWorkerRequest))
+	}
+	return interceptor(ctx, in, info, handler)
 }
 
 func _ForgeService_GetTask_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
@@ -166,6 +190,10 @@ var ForgeService_ServiceDesc = grpc.ServiceDesc{
 	HandlerType: (*ForgeServiceServer)(nil),
 	Methods: []grpc.MethodDesc{
 		{
+			MethodName: "RegisterWorker",
+			Handler:    _ForgeService_RegisterWorker_Handler,
+		},
+		{
 			MethodName: "GetTask",
 			Handler:    _ForgeService_GetTask_Handler,
 		},
@@ -175,5 +203,5 @@ var ForgeService_ServiceDesc = grpc.ServiceDesc{
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
-	Metadata: "proto/forge.proto",
+	Metadata: "forge.proto",
 }
