@@ -11,8 +11,8 @@ import (
 )
 
 func main() {
-	// 1. Create the scheduler
-	sched := scheduler.New()
+	// NOTE: This is the old Stage 1 entry point. Use cmd/scheduler/main.go instead.
+	sched := scheduler.New(nil)
 
 	// 2. Create and start a worker in a goroutine
 	w := worker.New("worker-1", sched)
@@ -62,7 +62,7 @@ func main() {
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusCreated)
-		
+
 		json.NewEncoder(w).Encode(task)
 	})
 
@@ -84,7 +84,7 @@ func main() {
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		
+
 		json.NewEncoder(w).Encode(task)
 	})
 
@@ -100,9 +100,9 @@ func main() {
 		w.Header().Set("Content-Type", "application/json")
 
 		if err := json.NewEncoder(w).Encode(tasks); err != nil {
-        	http.Error(w, "Failed to encode response", http.StatusInternalServerError)
-        	return
-    	}
+			http.Error(w, "Failed to encode response", http.StatusInternalServerError)
+			return
+		}
 	})
 
 	// 4. Start the HTTP server

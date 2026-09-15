@@ -11,11 +11,21 @@ import (
 
 	"github.com/ronavpoonekar/forge/proto/forgepb"
 	"github.com/ronavpoonekar/forge/scheduler"
+	"github.com/ronavpoonekar/forge/store"
 )
 
 func main() {
-	// 1. Create the scheduler (same as Stage 1 — this doesn't change)
-	sched := scheduler.New()
+	// 1. Connect to PostgreSQL and create the store
+	dbConnStr := "postgres://localhost:5432/forge?sslmode=disable"
+	st, err := store.New(dbConnStr)
+	if err != nil {
+		log.Fatalf("Failed to connect to database: %v", err)
+	}
+	defer st.Close()
+	fmt.Println("Connected to PostgreSQL")
+
+	// 2. Create the scheduler backed by the database store
+	sched := scheduler.New(st)
 
 	// 2. Start the gRPC server so workers can connect
 	//

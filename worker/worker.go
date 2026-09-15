@@ -77,6 +77,6 @@ func (w *Worker) Start() {
 			}
 		}
 
-		w.scheduler.CompleteTask(task.ID, string(output), exitCode)
+		w.scheduler.CompleteTask(task.ID, w.id, string(output), exitCode)
 	}
 }

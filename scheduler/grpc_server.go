@@ -32,7 +32,7 @@ func (s *GRPCServer) RegisterWorker(ctx context.Context, req *forgepb.RegisterWo
 	log.Printf("Worker %s registering", req.WorkerId)
 
 	s.scheduler.RegisterWorker(req.WorkerId)
-	
+
 	return &forgepb.RegisterWorkerResponse{
 		Ok: true,
 	}, nil
@@ -65,7 +65,7 @@ func (s *GRPCServer) GetTask(ctx context.Context, req *forgepb.GetTaskRequest) (
 func (s *GRPCServer) ReportResult(ctx context.Context, req *forgepb.ReportResultRequest) (*forgepb.ReportResultResponse, error) {
 	log.Printf("Worker %s completed task %s (exit code: %d)", req.WorkerId, req.TaskId, req.ExitCode)
 
-	s.scheduler.CompleteTask(req.TaskId, req.Output, int(req.ExitCode))
+	s.scheduler.CompleteTask(req.TaskId, req.WorkerId, req.Output, int(req.ExitCode))
 
 	return &forgepb.ReportResultResponse{
 		Ok: true,
