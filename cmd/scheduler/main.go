@@ -1,11 +1,16 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
 	"net"
 	"net/http"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
 
 	"google.golang.org/grpc"
 
@@ -26,6 +31,23 @@ func main() {
 
 	// 2. Create the scheduler backed by the database store
 	sched := scheduler.New(st)
+
+	// Stage 5: Create a context for graceful shutdown and start the lease checker
+	//
+	// signal.NotifyContext creates a context that cancels automatically on Ctrl+C.
+	// We pass this context to the lease checker so it stops cleanly on shutdown.
+	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer cancel()
+
+	// Exit the process cleanly when Ctrl+C cancels the context
+	go func() {
+		<-ctx.Done()
+		os.Exit(0)
+	}()
+
+	// Start the lease checker in the background
+	// Checks every 10 seconds for workers that haven't heartbeated in 15 seconds
+	go sched.StartLeaseChecker(ctx, 10*time.Second, 15*time.Second)
 
 	// 2. Start the gRPC server so workers can connect
 	//

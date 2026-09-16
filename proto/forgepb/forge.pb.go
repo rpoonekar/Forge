@@ -21,6 +21,7 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+// --- RegisterWorker ---
 type RegisterWorkerRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	WorkerId      string                 `protobuf:"bytes,1,opt,name=worker_id,json=workerId,proto3" json:"worker_id,omitempty"`
@@ -109,6 +110,7 @@ func (x *RegisterWorkerResponse) GetOk() bool {
 	return false
 }
 
+// --- GetTask ---
 type GetTaskRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	WorkerId      string                 `protobuf:"bytes,1,opt,name=worker_id,json=workerId,proto3" json:"worker_id,omitempty"`
@@ -213,6 +215,7 @@ func (x *GetTaskResponse) GetCommand() string {
 	return ""
 }
 
+// --- ReportResult ---
 type ReportResultRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	WorkerId      string                 `protobuf:"bytes,1,opt,name=worker_id,json=workerId,proto3" json:"worker_id,omitempty"`
@@ -325,6 +328,95 @@ func (x *ReportResultResponse) GetOk() bool {
 	return false
 }
 
+// --- Heartbeat (Stage 5: NEW) ---
+type HeartbeatRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	WorkerId      string                 `protobuf:"bytes,1,opt,name=worker_id,json=workerId,proto3" json:"worker_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *HeartbeatRequest) Reset() {
+	*x = HeartbeatRequest{}
+	mi := &file_forge_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *HeartbeatRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*HeartbeatRequest) ProtoMessage() {}
+
+func (x *HeartbeatRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_forge_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use HeartbeatRequest.ProtoReflect.Descriptor instead.
+func (*HeartbeatRequest) Descriptor() ([]byte, []int) {
+	return file_forge_proto_rawDescGZIP(), []int{6}
+}
+
+func (x *HeartbeatRequest) GetWorkerId() string {
+	if x != nil {
+		return x.WorkerId
+	}
+	return ""
+}
+
+type HeartbeatResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Ok            bool                   `protobuf:"varint,1,opt,name=ok,proto3" json:"ok,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *HeartbeatResponse) Reset() {
+	*x = HeartbeatResponse{}
+	mi := &file_forge_proto_msgTypes[7]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *HeartbeatResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*HeartbeatResponse) ProtoMessage() {}
+
+func (x *HeartbeatResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_forge_proto_msgTypes[7]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use HeartbeatResponse.ProtoReflect.Descriptor instead.
+func (*HeartbeatResponse) Descriptor() ([]byte, []int) {
+	return file_forge_proto_rawDescGZIP(), []int{7}
+}
+
+func (x *HeartbeatResponse) GetOk() bool {
+	if x != nil {
+		return x.Ok
+	}
+	return false
+}
+
 var File_forge_proto protoreflect.FileDescriptor
 
 const file_forge_proto_rawDesc = "" +
@@ -346,11 +438,16 @@ const file_forge_proto_rawDesc = "" +
 	"\x06output\x18\x03 \x01(\tR\x06output\x12\x1b\n" +
 	"\texit_code\x18\x04 \x01(\x05R\bexitCode\"&\n" +
 	"\x14ReportResultResponse\x12\x0e\n" +
-	"\x02ok\x18\x01 \x01(\bR\x02ok2\xec\x01\n" +
+	"\x02ok\x18\x01 \x01(\bR\x02ok\"/\n" +
+	"\x10HeartbeatRequest\x12\x1b\n" +
+	"\tworker_id\x18\x01 \x01(\tR\bworkerId\"#\n" +
+	"\x11HeartbeatResponse\x12\x0e\n" +
+	"\x02ok\x18\x01 \x01(\bR\x02ok2\xb0\x02\n" +
 	"\fForgeService\x12Q\n" +
 	"\x0eRegisterWorker\x12\x1e.forgepb.RegisterWorkerRequest\x1a\x1f.forgepb.RegisterWorkerResponse\x12<\n" +
 	"\aGetTask\x12\x17.forgepb.GetTaskRequest\x1a\x18.forgepb.GetTaskResponse\x12K\n" +
-	"\fReportResult\x12\x1c.forgepb.ReportResultRequest\x1a\x1d.forgepb.ReportResultResponseB.Z,github.com/ronavpoonekar/forge/proto/forgepbb\x06proto3"
+	"\fReportResult\x12\x1c.forgepb.ReportResultRequest\x1a\x1d.forgepb.ReportResultResponse\x12B\n" +
+	"\tHeartbeat\x12\x19.forgepb.HeartbeatRequest\x1a\x1a.forgepb.HeartbeatResponseB.Z,github.com/ronavpoonekar/forge/proto/forgepbb\x06proto3"
 
 var (
 	file_forge_proto_rawDescOnce sync.Once
@@ -364,7 +461,7 @@ func file_forge_proto_rawDescGZIP() []byte {
 	return file_forge_proto_rawDescData
 }
 
-var file_forge_proto_msgTypes = make([]protoimpl.MessageInfo, 6)
+var file_forge_proto_msgTypes = make([]protoimpl.MessageInfo, 8)
 var file_forge_proto_goTypes = []any{
 	(*RegisterWorkerRequest)(nil),  // 0: forgepb.RegisterWorkerRequest
 	(*RegisterWorkerResponse)(nil), // 1: forgepb.RegisterWorkerResponse
@@ -372,16 +469,20 @@ var file_forge_proto_goTypes = []any{
 	(*GetTaskResponse)(nil),        // 3: forgepb.GetTaskResponse
 	(*ReportResultRequest)(nil),    // 4: forgepb.ReportResultRequest
 	(*ReportResultResponse)(nil),   // 5: forgepb.ReportResultResponse
+	(*HeartbeatRequest)(nil),       // 6: forgepb.HeartbeatRequest
+	(*HeartbeatResponse)(nil),      // 7: forgepb.HeartbeatResponse
 }
 var file_forge_proto_depIdxs = []int32{
 	0, // 0: forgepb.ForgeService.RegisterWorker:input_type -> forgepb.RegisterWorkerRequest
 	2, // 1: forgepb.ForgeService.GetTask:input_type -> forgepb.GetTaskRequest
 	4, // 2: forgepb.ForgeService.ReportResult:input_type -> forgepb.ReportResultRequest
-	1, // 3: forgepb.ForgeService.RegisterWorker:output_type -> forgepb.RegisterWorkerResponse
-	3, // 4: forgepb.ForgeService.GetTask:output_type -> forgepb.GetTaskResponse
-	5, // 5: forgepb.ForgeService.ReportResult:output_type -> forgepb.ReportResultResponse
-	3, // [3:6] is the sub-list for method output_type
-	0, // [0:3] is the sub-list for method input_type
+	6, // 3: forgepb.ForgeService.Heartbeat:input_type -> forgepb.HeartbeatRequest
+	1, // 4: forgepb.ForgeService.RegisterWorker:output_type -> forgepb.RegisterWorkerResponse
+	3, // 5: forgepb.ForgeService.GetTask:output_type -> forgepb.GetTaskResponse
+	5, // 6: forgepb.ForgeService.ReportResult:output_type -> forgepb.ReportResultResponse
+	7, // 7: forgepb.ForgeService.Heartbeat:output_type -> forgepb.HeartbeatResponse
+	4, // [4:8] is the sub-list for method output_type
+	0, // [0:4] is the sub-list for method input_type
 	0, // [0:0] is the sub-list for extension type_name
 	0, // [0:0] is the sub-list for extension extendee
 	0, // [0:0] is the sub-list for field type_name
@@ -398,7 +499,7 @@ func file_forge_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_forge_proto_rawDesc), len(file_forge_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   6,
+			NumMessages:   8,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

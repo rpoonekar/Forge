@@ -1,46 +1,105 @@
 package scheduler
 
 import (
+	"context"
 	"log"
+	"time"
 
 	"github.com/ronavpoonekar/forge/model"
 	"github.com/ronavpoonekar/forge/store"
 )
 
 // Scheduler manages task scheduling and worker coordination.
-//
-// Stage 4 change: the scheduler no longer holds any state in memory.
-// All state lives in PostgreSQL via the Store. The mutex is gone too —
-// the database handles concurrency (PostgreSQL serializes conflicting
-// updates automatically).
-//
-// Compare to Stage 3:
-//
-//	Stage 3: s.mu.Lock(); task := s.tasks[id]; s.mu.Unlock()
-//	Stage 4: task, err := s.store.GetTask(id)
-//
-// The methods below are thin wrappers around Store methods. They exist
-// so that the gRPC server and HTTP handlers don't need to know about
-// the Store directly — they still call scheduler.Submit(), etc.
 type Scheduler struct {
 	store *store.Store
 }
 
-// New creates a new Scheduler backed by the given Store.
 func New(st *store.Store) *Scheduler {
 	return &Scheduler{
 		store: st,
 	}
 }
 
-// RegisterWorker registers a worker (or updates its last_seen).
+// StartLeaseChecker runs a background goroutine that periodically checks
+// for dead workers and re-queues their tasks.
 //
-// TODO (Step 9): Implement this method
+// This is the CORE distributed systems code in Forge.
 //
-// Steps:
-//  1. Call s.store.RegisterWorker(workerID)
-//  2. Handle the error (log it, return nil if error)
-//  3. Return the worker
+// How it works:
+//  1. Every `checkInterval` (e.g., 10 seconds), it wakes up
+//  2. Queries the database for workers whose last_seen is older than `timeout`
+//  3. For each stale worker:
+//     a. Marks the worker as OFFLINE
+//     b. Moves any RUNNING tasks back to QUEUED
+//  4. Repeats until the context is cancelled (scheduler shutdown)
+//
+// The ctx parameter controls the lifecycle — when you cancel the context
+// (e.g., on Ctrl+C), this goroutine stops cleanly.
+//
+// TODO (Step 3): Implement this method
+//
+// Skeleton:
+//
+//	func (s *Scheduler) StartLeaseChecker(ctx context.Context, checkInterval, timeout time.Duration) {
+//	    ticker := time.NewTicker(checkInterval)
+//	    defer ticker.Stop()
+//
+//	    log.Printf("Lease checker started (check every %s, timeout %s)", checkInterval, timeout)
+//
+//	    for {
+//	        select {
+//	        case <-ticker.C:
+//	            // 1. Get stale workers from the store
+//	            // 2. For each stale worker:
+//	            //    a. Log that we detected a dead worker
+//	            //    b. Call s.store.RequeueTasksForWorker(worker.ID)
+//	            //    c. Log how many tasks were re-queued
+//	            //    d. Mark the worker as OFFLINE:
+//	            //       s.store.UpdateWorkerStatus(worker.ID, model.WorkerStatusOffline, "", 0)
+//	        case <-ctx.Done():
+//	            log.Println("Lease checker stopped")
+//	            return
+//	        }
+//	    }
+//	}
+//
+// Think about:
+//   - The `select` statement waits for EITHER the ticker to fire OR the
+//     context to be cancelled. Whichever happens first runs that case.
+//   - This is idiomatic Go concurrency: a goroutine with a select loop.
+//   - The caller runs this with: go s.StartLeaseChecker(ctx, 10*time.Second, 15*time.Second)
+func (s *Scheduler) StartLeaseChecker(ctx context.Context, checkInterval, timeout time.Duration) {
+	ticker := time.NewTicker(checkInterval)
+	defer ticker.Stop()
+
+	log.Printf("Lease checker started (check every %s, timeout %s)", checkInterval, timeout)
+
+	for {
+		select {
+		case <- ticker.C:
+			staleworkers, err := s.store.GetStaleWorkers(timeout)
+			if err != nil {
+				log.Printf("Error checking stale workers: %v", err)
+				continue
+			}
+
+			for _, worker := range staleworkers {
+				log.Printf("Dead worker found (WorkerId: %s)", worker.ID)
+
+				count, _ := s.store.RequeueTasksForWorker(worker.ID)
+				log.Printf("%d tasks were re-queued", count)
+
+				s.store.UpdateWorkerStatus(worker.ID, model.WorkerStatusOffline, "", 0)
+			}
+		case <- ctx.Done():
+			log.Println("Lease checker stopped")
+			return
+		}
+	}
+}
+
+// --- Existing methods (unchanged from Stage 4) ---
+
 func (s *Scheduler) RegisterWorker(workerID string) *model.Worker {
 	worker, err := s.store.RegisterWorker(workerID)
 	if err != nil {
@@ -50,14 +109,6 @@ func (s *Scheduler) RegisterWorker(workerID string) *model.Worker {
 	return worker
 }
 
-// Submit adds a new task to the queue.
-//
-// TODO (Step 9): Implement this method
-//
-// Steps:
-//  1. Call s.store.CreateTask(command)
-//  2. Handle the error
-//  3. Return the task
 func (s *Scheduler) Submit(command string) *model.Task {
 	task, err := s.store.CreateTask(command)
 	if err != nil {
@@ -67,17 +118,6 @@ func (s *Scheduler) Submit(command string) *model.Task {
 	return task
 }
 
-// NextTask assigns the next queued task to a worker.
-//
-// TODO (Step 10): Implement this method
-//
-// This needs to:
-//  1. Call s.store.AssignNextTask(workerID)
-//  2. If a task was returned, update the worker to BUSY:
-//     s.store.UpdateWorkerStatus(workerID, model.WorkerStatusBusy, task.ID, 0)
-//  3. If no task (nil), just update the worker's last_seen:
-//     s.store.UpdateWorkerStatus(workerID, model.WorkerStatusIdle, "", 0)
-//  4. Return the task (or nil)
 func (s *Scheduler) NextTask(workerID string) *model.Task {
 	task, err := s.store.AssignNextTask(workerID)
 	if err != nil {
@@ -86,27 +126,14 @@ func (s *Scheduler) NextTask(workerID string) *model.Task {
 	}
 
 	if task != nil {
-		// Worker got a task — mark it as BUSY
 		s.store.UpdateWorkerStatus(workerID, model.WorkerStatusBusy, task.ID, 0)
 	} else {
-		// No task available — just update last_seen
 		s.store.UpdateWorkerStatus(workerID, model.WorkerStatusIdle, "", 0)
 	}
 
 	return task
 }
 
-// CompleteTask marks a task as completed and updates the worker.
-//
-// TODO (Step 11): Implement this method
-//
-// Steps:
-//  1. Call s.store.CompleteTask(taskID, output, exitCode)
-//  2. Update the worker back to IDLE with tasksRunDelta = 1:
-//     s.store.UpdateWorkerStatus(workerID, model.WorkerStatusIdle, "", 1)
-//
-// Note: CompleteTask now needs workerID as a parameter (the gRPC server
-// already sends it in the request).
 func (s *Scheduler) CompleteTask(taskID string, workerID string, output string, exitCode int) {
 	if err := s.store.CompleteTask(taskID, output, exitCode); err != nil {
 		log.Printf("Error completing task %s: %v", taskID, err)
@@ -116,7 +143,6 @@ func (s *Scheduler) CompleteTask(taskID string, workerID string, output string, 
 	}
 }
 
-// GetTask returns a task by ID.
 func (s *Scheduler) GetTask(id string) *model.Task {
 	task, err := s.store.GetTask(id)
 	if err != nil {
@@ -126,7 +152,6 @@ func (s *Scheduler) GetTask(id string) *model.Task {
 	return task
 }
 
-// GetAllTasks returns all tasks.
 func (s *Scheduler) GetAllTasks() []*model.Task {
 	tasks, err := s.store.GetAllTasks()
 	if err != nil {
@@ -136,7 +161,6 @@ func (s *Scheduler) GetAllTasks() []*model.Task {
 	return tasks
 }
 
-// GetAllWorkers returns all workers.
 func (s *Scheduler) GetAllWorkers() []*model.Worker {
 	workers, err := s.store.GetAllWorkers()
 	if err != nil {

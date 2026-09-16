@@ -22,20 +22,18 @@ const (
 	ForgeService_RegisterWorker_FullMethodName = "/forgepb.ForgeService/RegisterWorker"
 	ForgeService_GetTask_FullMethodName        = "/forgepb.ForgeService/GetTask"
 	ForgeService_ReportResult_FullMethodName   = "/forgepb.ForgeService/ReportResult"
+	ForgeService_Heartbeat_FullMethodName      = "/forgepb.ForgeService/Heartbeat"
 )
 
 // ForgeServiceClient is the client API for ForgeService service.
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type ForgeServiceClient interface {
-	// RegisterWorker is called once when a worker starts up.
-	// The scheduler records the worker in its registry.
-	// Stage 3: NEW RPC
 	RegisterWorker(ctx context.Context, in *RegisterWorkerRequest, opts ...grpc.CallOption) (*RegisterWorkerResponse, error)
-	// GetTask is called by a worker to request a task to execute.
 	GetTask(ctx context.Context, in *GetTaskRequest, opts ...grpc.CallOption) (*GetTaskResponse, error)
-	// ReportResult is called by a worker after it finishes executing a task.
 	ReportResult(ctx context.Context, in *ReportResultRequest, opts ...grpc.CallOption) (*ReportResultResponse, error)
+	// Stage 5: NEW — workers call this every few seconds to say "I'm alive"
+	Heartbeat(ctx context.Context, in *HeartbeatRequest, opts ...grpc.CallOption) (*HeartbeatResponse, error)
 }
 
 type forgeServiceClient struct {
@@ -76,18 +74,25 @@ func (c *forgeServiceClient) ReportResult(ctx context.Context, in *ReportResultR
 	return out, nil
 }
 
+func (c *forgeServiceClient) Heartbeat(ctx context.Context, in *HeartbeatRequest, opts ...grpc.CallOption) (*HeartbeatResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(HeartbeatResponse)
+	err := c.cc.Invoke(ctx, ForgeService_Heartbeat_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // ForgeServiceServer is the server API for ForgeService service.
 // All implementations must embed UnimplementedForgeServiceServer
 // for forward compatibility.
 type ForgeServiceServer interface {
-	// RegisterWorker is called once when a worker starts up.
-	// The scheduler records the worker in its registry.
-	// Stage 3: NEW RPC
 	RegisterWorker(context.Context, *RegisterWorkerRequest) (*RegisterWorkerResponse, error)
-	// GetTask is called by a worker to request a task to execute.
 	GetTask(context.Context, *GetTaskRequest) (*GetTaskResponse, error)
-	// ReportResult is called by a worker after it finishes executing a task.
 	ReportResult(context.Context, *ReportResultRequest) (*ReportResultResponse, error)
+	// Stage 5: NEW — workers call this every few seconds to say "I'm alive"
+	Heartbeat(context.Context, *HeartbeatRequest) (*HeartbeatResponse, error)
 	mustEmbedUnimplementedForgeServiceServer()
 }
 
@@ -106,6 +111,9 @@ func (UnimplementedForgeServiceServer) GetTask(context.Context, *GetTaskRequest)
 }
 func (UnimplementedForgeServiceServer) ReportResult(context.Context, *ReportResultRequest) (*ReportResultResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ReportResult not implemented")
+}
+func (UnimplementedForgeServiceServer) Heartbeat(context.Context, *HeartbeatRequest) (*HeartbeatResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method Heartbeat not implemented")
 }
 func (UnimplementedForgeServiceServer) mustEmbedUnimplementedForgeServiceServer() {}
 func (UnimplementedForgeServiceServer) testEmbeddedByValue()                      {}
@@ -182,6 +190,24 @@ func _ForgeService_ReportResult_Handler(srv interface{}, ctx context.Context, de
 	return interceptor(ctx, in, info, handler)
 }
 
+func _ForgeService_Heartbeat_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(HeartbeatRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ForgeServiceServer).Heartbeat(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ForgeService_Heartbeat_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ForgeServiceServer).Heartbeat(ctx, req.(*HeartbeatRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // ForgeService_ServiceDesc is the grpc.ServiceDesc for ForgeService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -200,6 +226,10 @@ var ForgeService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ReportResult",
 			Handler:    _ForgeService_ReportResult_Handler,
+		},
+		{
+			MethodName: "Heartbeat",
+			Handler:    _ForgeService_Heartbeat_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

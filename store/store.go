@@ -98,10 +98,10 @@ func (s *Store) CreateTask(command string) (*model.Task, error) {
 	}
 
 	task := &model.Task{
-		ID: id,
+		ID:        id,
 		CreatedAt: created_at,
-		Status: status,
-		Command: command,
+		Status:    status,
+		Command:   command,
 	}
 
 	return task, nil
@@ -154,7 +154,7 @@ func (s *Store) GetTask(id string) (*model.Task, error) {
 	if err != nil {
 		return nil, err
 	}
-	
+
 	return task, nil
 }
 
@@ -405,4 +405,74 @@ func (s *Store) GetAllWorkers() ([]*model.Worker, error) {
 	}
 
 	return workers, nil
+}
+
+// --- Stage 5: Heartbeat/Lease methods ---
+
+// GetStaleWorkers returns workers whose last_seen is older than the given threshold.
+// These workers are presumed dead.
+//
+// For example, if threshold is 15 seconds, this returns workers that haven't
+// sent a heartbeat in the last 15 seconds.
+//
+// SQL:
+//
+//	SELECT id, status, current_task, registered_at, last_seen, tasks_run
+//	FROM workers
+//	WHERE last_seen < $1 AND status != 'OFFLINE'
+//
+// The $1 parameter is: time.Now().Add(-threshold)
+// So if threshold is 15s and now is 12:00:15, we look for last_seen < 12:00:00
+//
+// TODO (Step 1): Implement this method
+//
+// Same scanning pattern as GetAllWorkers, but with a WHERE clause.
+func (s *Store) GetStaleWorkers(threshold time.Duration) ([]*model.Worker, error) {
+	workers := []*model.Worker{}
+
+	rows, err := s.db.Query("SELECT id, status, current_task, registered_at, last_seen, tasks_run FROM workers WHERE last_seen < $1 AND status != 'OFFLINE'", time.Now().Add(-threshold))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		worker := &model.Worker{}
+
+		rows.Scan(&worker.ID, &worker.Status, &worker.CurrentTask, &worker.RegisteredAt, &worker.LastSeen, &worker.TasksRun)
+
+		workers = append(workers, worker)
+	}
+
+	if rows.Err() != nil {
+		return nil, rows.Err()
+	}
+
+	return workers, nil
+}
+
+// RequeueTasksForWorker moves all RUNNING tasks assigned to a specific worker
+// back to QUEUED so another worker can pick them up.
+//
+// This is called when a worker is detected as dead.
+//
+// SQL:
+//
+//	UPDATE tasks SET status = 'QUEUED', worker_id = '', started_at = NULL
+//	WHERE worker_id = $1 AND status = 'RUNNING'
+//
+// Returns the number of tasks that were re-queued.
+//
+// TODO (Step 2): Implement this method
+//
+// Steps:
+//  1. Execute the UPDATE
+//  2. Get the number of affected rows: result.RowsAffected()
+//  3. Return that count
+func (s *Store) RequeueTasksForWorker(workerID string) (int64, error) {
+	result, err := s.db.Exec("UPDATE tasks SET status = 'QUEUED', worker_id = '', started_at = NULL WHERE worker_id = $1 AND status = 'RUNNING'", workerID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }

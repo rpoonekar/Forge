@@ -10,49 +10,39 @@ option go_package = "github.com/ronavpoonekar/forge/proto/forgepb";
 //     --proto_path=proto proto/forge.proto
 
 service ForgeService {
-  // RegisterWorker is called once when a worker starts up.
-  // The scheduler records the worker in its registry.
-  // Stage 3: NEW RPC
   rpc RegisterWorker(RegisterWorkerRequest) returns (RegisterWorkerResponse);
-
-  // GetTask is called by a worker to request a task to execute.
   rpc GetTask(GetTaskRequest) returns (GetTaskResponse);
-
-  // ReportResult is called by a worker after it finishes executing a task.
   rpc ReportResult(ReportResultRequest) returns (ReportResultResponse);
+
+  // Stage 5: NEW — workers call this every few seconds to say "I'm alive"
+  rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse);
 }
 
-// --- RegisterWorker messages (Stage 3: NEW) ---
+// --- RegisterWorker ---
+message RegisterWorkerRequest { string worker_id = 1; }
+message RegisterWorkerResponse { bool ok = 1; }
 
-message RegisterWorkerRequest {
-  string worker_id = 1;
-}
-
-message RegisterWorkerResponse {
-  bool ok = 1;
-}
-
-// --- GetTask messages ---
-
-message GetTaskRequest {
-  string worker_id = 1;
-}
-
+// --- GetTask ---
+message GetTaskRequest { string worker_id = 1; }
 message GetTaskResponse {
   bool has_task = 1;
   string task_id = 2;
   string command = 3;
 }
 
-// --- ReportResult messages ---
-
+// --- ReportResult ---
 message ReportResultRequest {
   string worker_id = 1;
   string task_id = 2;
   string output = 3;
   int32 exit_code = 4;
 }
+message ReportResultResponse { bool ok = 1; }
 
-message ReportResultResponse {
+// --- Heartbeat (Stage 5: NEW) ---
+message HeartbeatRequest {
+  string worker_id = 1;
+}
+message HeartbeatResponse {
   bool ok = 1;
 }
