@@ -90,18 +90,20 @@ func (s *Store) CreateTask(command string) (*model.Task, error) {
 	id := uuid.NewString()
 	created_at := time.Now()
 	status := model.StatusQueued
+	maxRetries := model.DefaultMaxRetries
 
-	_, err := s.db.Exec("INSERT INTO tasks (id, command, status, created_at) VALUES ($1, $2, $3, $4)", id, command, status, created_at)
+	_, err := s.db.Exec("INSERT INTO tasks (id, command, status, created_at, max_retries) VALUES ($1, $2, $3, $4, $5)", id, command, status, created_at, maxRetries)
 
 	if err != nil {
 		return nil, err
 	}
 
 	task := &model.Task{
-		ID:        id,
-		CreatedAt: created_at,
-		Status:    status,
-		Command:   command,
+		ID:         id,
+		CreatedAt:  created_at,
+		Status:     status,
+		Command:    command,
+		MaxRetries: maxRetries,
 	}
 
 	return task, nil
@@ -136,16 +138,19 @@ func (s *Store) CreateTask(command string) (*model.Task, error) {
 //	}
 func (s *Store) GetTask(id string) (*model.Task, error) {
 	task := &model.Task{}
-	var startedAt, endedAt sql.NullTime
+	var startedAt, endedAt, nextRetryAt sql.NullTime
 
-	row := s.db.QueryRow("SELECT id, command, status, worker_id, created_at, started_at, ended_at, output, exit_code FROM tasks WHERE id = $1", id)
-	err := row.Scan(&task.ID, &task.Command, &task.Status, &task.WorkerID, &task.CreatedAt, &startedAt, &endedAt, &task.Output, &task.ExitCode)
+	row := s.db.QueryRow("SELECT id, command, status, worker_id, created_at, started_at, ended_at, output, exit_code, retry_count, max_retries, next_retry_at FROM tasks WHERE id = $1", id)
+	err := row.Scan(&task.ID, &task.Command, &task.Status, &task.WorkerID, &task.CreatedAt, &startedAt, &endedAt, &task.Output, &task.ExitCode, &task.RetryCount, &task.MaxRetries, &nextRetryAt)
 
 	if startedAt.Valid {
 		task.StartedAt = startedAt.Time
 	}
 	if endedAt.Valid {
 		task.EndedAt = endedAt.Time
+	}
+	if nextRetryAt.Valid {
+		task.NextRetryAt = nextRetryAt.Time
 	}
 
 	if err == sql.ErrNoRows {
@@ -180,7 +185,7 @@ func (s *Store) GetTask(id string) (*model.Task, error) {
 func (s *Store) GetAllTasks() ([]*model.Task, error) {
 	tasks := []*model.Task{}
 
-	rows, err := s.db.Query("SELECT id, command, status, worker_id, created_at, started_at, ended_at, output, exit_code FROM tasks ORDER BY created_at DESC")
+	rows, err := s.db.Query("SELECT id, command, status, worker_id, created_at, started_at, ended_at, output, exit_code, retry_count, max_retries, next_retry_at FROM tasks ORDER BY created_at DESC")
 	if err != nil {
 		return nil, err
 	}
@@ -188,15 +193,18 @@ func (s *Store) GetAllTasks() ([]*model.Task, error) {
 
 	for rows.Next() {
 		task := &model.Task{}
-		var startedAt, endedAt sql.NullTime
+		var startedAt, endedAt, nextRetryAt sql.NullTime
 
-		rows.Scan(&task.ID, &task.Command, &task.Status, &task.WorkerID, &task.CreatedAt, &startedAt, &endedAt, &task.Output, &task.ExitCode)
+		rows.Scan(&task.ID, &task.Command, &task.Status, &task.WorkerID, &task.CreatedAt, &startedAt, &endedAt, &task.Output, &task.ExitCode, &task.RetryCount, &task.MaxRetries, &nextRetryAt)
 
 		if startedAt.Valid {
 			task.StartedAt = startedAt.Time
 		}
 		if endedAt.Valid {
 			task.EndedAt = endedAt.Time
+		}
+		if nextRetryAt.Valid {
+			task.NextRetryAt = nextRetryAt.Time
 		}
 
 		tasks = append(tasks, task)
@@ -243,19 +251,32 @@ func (s *Store) GetAllTasks() ([]*model.Task, error) {
 //  3. If sql.ErrNoRows — no queued tasks, return nil, nil
 //  4. Return the task
 func (s *Store) AssignNextTask(workerID string) (*model.Task, error) {
-	query := "UPDATE tasks SET status = 'RUNNING', worker_id = $1, started_at = $2 WHERE id = (SELECT id FROM tasks WHERE status = 'QUEUED' ORDER BY created_at LIMIT 1) RETURNING id, command, status, worker_id, created_at, started_at, ended_at, output, exit_code"
+	// Stage 6: the subquery now also checks next_retry_at
+	// A task is eligible if it's QUEUED and either:
+	//   - next_retry_at IS NULL (never been retried, fresh task)
+	//   - next_retry_at <= NOW() (retry delay has passed)
+	query := `UPDATE tasks SET status = 'RUNNING', worker_id = $1, started_at = $2
+		WHERE id = (
+			SELECT id FROM tasks
+			WHERE status = 'QUEUED' AND (next_retry_at IS NULL OR next_retry_at <= NOW())
+			ORDER BY created_at LIMIT 1
+		)
+		RETURNING id, command, status, worker_id, created_at, started_at, ended_at, output, exit_code, retry_count, max_retries, next_retry_at`
 
 	task := &model.Task{}
-	var startedAt, endedAt sql.NullTime
+	var startedAt, endedAt, nextRetryAt sql.NullTime
 
 	row := s.db.QueryRow(query, workerID, time.Now())
-	err := row.Scan(&task.ID, &task.Command, &task.Status, &task.WorkerID, &task.CreatedAt, &startedAt, &endedAt, &task.Output, &task.ExitCode)
+	err := row.Scan(&task.ID, &task.Command, &task.Status, &task.WorkerID, &task.CreatedAt, &startedAt, &endedAt, &task.Output, &task.ExitCode, &task.RetryCount, &task.MaxRetries, &nextRetryAt)
 
 	if startedAt.Valid {
 		task.StartedAt = startedAt.Time
 	}
 	if endedAt.Valid {
 		task.EndedAt = endedAt.Time
+	}
+	if nextRetryAt.Valid {
+		task.NextRetryAt = nextRetryAt.Time
 	}
 
 	if err == sql.ErrNoRows {
@@ -451,28 +472,78 @@ func (s *Store) GetStaleWorkers(threshold time.Duration) ([]*model.Worker, error
 	return workers, nil
 }
 
-// RequeueTasksForWorker moves all RUNNING tasks assigned to a specific worker
-// back to QUEUED so another worker can pick them up.
+// GetRunningTasksForWorker returns all RUNNING tasks assigned to a specific worker.
+// Used by the lease checker to decide per-task whether to retry or fail.
+func (s *Store) GetRunningTasksForWorker(workerID string) ([]*model.Task, error) {
+	tasks := []*model.Task{}
+
+	rows, err := s.db.Query("SELECT id, command, status, worker_id, created_at, started_at, ended_at, output, exit_code, retry_count, max_retries, next_retry_at FROM tasks WHERE worker_id = $1 AND status = 'RUNNING'", workerID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		task := &model.Task{}
+		var startedAt, endedAt, nextRetryAt sql.NullTime
+
+		rows.Scan(&task.ID, &task.Command, &task.Status, &task.WorkerID, &task.CreatedAt, &startedAt, &endedAt, &task.Output, &task.ExitCode, &task.RetryCount, &task.MaxRetries, &nextRetryAt)
+
+		if startedAt.Valid {
+			task.StartedAt = startedAt.Time
+		}
+		if endedAt.Valid {
+			task.EndedAt = endedAt.Time
+		}
+		if nextRetryAt.Valid {
+			task.NextRetryAt = nextRetryAt.Time
+		}
+
+		tasks = append(tasks, task)
+	}
+
+	return tasks, rows.Err()
+}
+
+// RetryTask increments the retry count and moves a task back to QUEUED
+// with a delay before it's eligible to be picked up again.
 //
-// This is called when a worker is detected as dead.
+// The delay is exponential backoff: baseDelay * 2^(retryCount)
+// So with a 2s base: 2s, 4s, 8s, 16s...
+//
+// TODO (Step 1): Implement this method
 //
 // SQL:
 //
-//	UPDATE tasks SET status = 'QUEUED', worker_id = '', started_at = NULL
-//	WHERE worker_id = $1 AND status = 'RUNNING'
+//	UPDATE tasks
+//	SET status = 'QUEUED', worker_id = '', started_at = NULL,
+//	    retry_count = retry_count + 1, next_retry_at = $1
+//	WHERE id = $2
 //
-// Returns the number of tasks that were re-queued.
+// Steps:
+//  1. Calculate the retry delay: baseDelay * 2^(currentRetryCount)
+//     Use: time.Duration(1 << task.RetryCount) * baseDelay
+//     (1 << n is the same as 2^n using bit shifting)
+//  2. Calculate next_retry_at: time.Now().Add(delay)
+//  3. Execute the UPDATE
+func (s *Store) RetryTask(taskID string, retryDelay time.Duration) error {
+	query := "UPDATE tasks SET status = 'QUEUED', worker_id = '', started_at = NULL, retry_count = retry_count + 1, next_retry_at = $1 WHERE id = $2"
+
+	_, err := s.db.Exec(query, time.Now().Add(retryDelay), taskID)
+
+	return err
+}
+
+// FailTaskPermanently marks a task as permanently FAILED (max retries exceeded).
 //
 // TODO (Step 2): Implement this method
 //
-// Steps:
-//  1. Execute the UPDATE
-//  2. Get the number of affected rows: result.RowsAffected()
-//  3. Return that count
-func (s *Store) RequeueTasksForWorker(workerID string) (int64, error) {
-	result, err := s.db.Exec("UPDATE tasks SET status = 'QUEUED', worker_id = '', started_at = NULL WHERE worker_id = $1 AND status = 'RUNNING'", workerID)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
+// SQL:
+//
+//	UPDATE tasks SET status = 'FAILED', ended_at = $1 WHERE id = $2
+func (s *Store) FailTaskPermanently(taskID string) error {
+	query := "UPDATE tasks SET status = 'FAILED', ended_at = $1 WHERE id = $2"
+	_, err := s.db.Exec(query, time.Now(), taskID)
+
+	return err
 }

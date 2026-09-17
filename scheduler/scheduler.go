@@ -76,7 +76,7 @@ func (s *Scheduler) StartLeaseChecker(ctx context.Context, checkInterval, timeou
 
 	for {
 		select {
-		case <- ticker.C:
+		case <-ticker.C:
 			staleworkers, err := s.store.GetStaleWorkers(timeout)
 			if err != nil {
 				log.Printf("Error checking stale workers: %v", err)
@@ -86,12 +86,42 @@ func (s *Scheduler) StartLeaseChecker(ctx context.Context, checkInterval, timeou
 			for _, worker := range staleworkers {
 				log.Printf("Dead worker found (WorkerId: %s)", worker.ID)
 
-				count, _ := s.store.RequeueTasksForWorker(worker.ID)
-				log.Printf("%d tasks were re-queued", count)
+				// Stage 6: Get the worker's running tasks and decide per-task
+				tasks, err := s.store.GetRunningTasksForWorker(worker.ID)
+				if err != nil {
+					log.Printf("Error getting tasks for dead worker %s: %v", worker.ID, err)
+					continue
+				}
+
+				for _, task := range tasks {
+					// TODO (Step 3): Implement retry decision logic
+					//
+					// Check if the task has retries remaining:
+					//   if task.RetryCount < task.MaxRetries {
+					//       // Calculate exponential backoff delay: 2s * 2^retryCount
+					//       delay := time.Duration(1<<task.RetryCount) * 2 * time.Second
+					//       log.Printf("Retrying task %s (attempt %d/%d, delay %s)",
+					//           task.ID, task.RetryCount+1, task.MaxRetries, delay)
+					//       s.store.RetryTask(task.ID, delay)
+					//   } else {
+					//       // Max retries exceeded — fail permanently
+					//       log.Printf("Task %s permanently FAILED (max retries %d exceeded)",
+					//           task.ID, task.MaxRetries)
+					//       s.store.FailTaskPermanently(task.ID)
+					//   }
+					if task.RetryCount < task.MaxRetries {
+						delay := time.Duration(1 << task.RetryCount) * 2 * time.Second
+						log.Printf("Retrying task %s (attempt %d/%d, delay %s)", task.ID, task.RetryCount + 1, task.MaxRetries, delay)
+						s.store.RetryTask(task.ID, delay)
+					} else {
+						log.Printf("Task %s permanently FAILED (max retries %d exceeded)", task.ID, task.MaxRetries)
+						s.store.FailTaskPermanently(task.ID)
+					}
+				}
 
 				s.store.UpdateWorkerStatus(worker.ID, model.WorkerStatusOffline, "", 0)
 			}
-		case <- ctx.Done():
+		case <-ctx.Done():
 			log.Println("Lease checker stopped")
 			return
 		}
