@@ -6,11 +6,13 @@ import "time"
 type Status string
 
 const (
+	StatusBlocked   Status = "BLOCKED" // Stage 8: waiting for dependencies to complete
 	StatusQueued    Status = "QUEUED"
 	StatusRunning   Status = "RUNNING"
 	StatusRetrying  Status = "RETRYING" // Stage 6: task is waiting to be retried
 	StatusSucceeded Status = "SUCCEEDED"
 	StatusFailed    Status = "FAILED"
+	StatusCanceled  Status = "CANCELED" // Stage 8: dependency failed, task cannot run
 )
 
 const DefaultMaxRetries = 3
@@ -18,6 +20,8 @@ const DefaultMaxRetries = 3
 // Task represents a single unit of work to be executed.
 type Task struct {
 	ID          string
+	BuildID     string // Stage 8: which build this task belongs to
+	Name        string // Stage 8: task identifier in the build (e.g. "lint", "test")
 	Command     string
 	Status      Status
 	WorkerID    string // which worker is running (or ran) this task

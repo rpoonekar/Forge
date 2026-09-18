@@ -3,9 +3,19 @@
 --   createdb forge
 --   psql forge < db/schema.sql
 
--- Tasks table: stores all task state (replaces the in-memory tasks map)
+-- Builds table: stores DAG build workflows
+CREATE TABLE IF NOT EXISTS builds (
+    id          TEXT PRIMARY KEY,
+    status      TEXT NOT NULL DEFAULT 'PENDING',
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    ended_at    TIMESTAMPTZ
+);
+
+-- Tasks table: stores all task state
 CREATE TABLE IF NOT EXISTS tasks (
     id            TEXT PRIMARY KEY,
+    build_id      TEXT REFERENCES builds(id) ON DELETE CASCADE,
+    name          TEXT DEFAULT '',
     command       TEXT NOT NULL,
     status        TEXT NOT NULL DEFAULT 'QUEUED',
     worker_id     TEXT DEFAULT '',
@@ -19,7 +29,15 @@ CREATE TABLE IF NOT EXISTS tasks (
     next_retry_at TIMESTAMPTZ
 );
 
--- Workers table: stores registered workers (replaces the in-memory workers map)
+-- Task dependencies join table: tracks DAG relationships
+-- task_id depends on parent_id (parent_id must SUCCEED before task_id can run)
+CREATE TABLE IF NOT EXISTS task_dependencies (
+    task_id    TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    parent_id  TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    PRIMARY KEY (task_id, parent_id)
+);
+
+-- Workers table: stores registered workers
 CREATE TABLE IF NOT EXISTS workers (
     id             TEXT PRIMARY KEY,
     status         TEXT NOT NULL DEFAULT 'IDLE',
@@ -29,8 +47,7 @@ CREATE TABLE IF NOT EXISTS workers (
     tasks_run      INTEGER DEFAULT 0
 );
 
--- Index on task status for fast queue lookups
--- When the scheduler calls "give me the next QUEUED task", this index
--- lets PostgreSQL find it instantly instead of scanning every row.
+-- Indexes for performance
 CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
-
+CREATE INDEX IF NOT EXISTS idx_tasks_build_id ON tasks(build_id);
+CREATE INDEX IF NOT EXISTS idx_task_deps_parent ON task_dependencies(parent_id);

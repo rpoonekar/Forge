@@ -14,6 +14,7 @@ import (
 
 	"google.golang.org/grpc"
 
+	"github.com/ronavpoonekar/forge/model"
 	"github.com/ronavpoonekar/forge/proto/forgepb"
 	"github.com/ronavpoonekar/forge/scheduler"
 	"github.com/ronavpoonekar/forge/store"
@@ -134,11 +135,64 @@ func main() {
 		json.NewEncoder(w).Encode(workers)
 	})
 
+	// Stage 8: Build endpoints for DAG workflows
+	submitBuildHandler := func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Tasks []model.TaskSpec `json:"tasks"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "Invalid JSON: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		if len(req.Tasks) == 0 {
+			http.Error(w, "Field 'tasks' cannot be empty", http.StatusBadRequest)
+			return
+		}
+
+		build, err := sched.SubmitBuild(req.Tasks)
+		if err != nil {
+			http.Error(w, fmt.Sprintf("Invalid build DAG: %v", err), http.StatusBadRequest)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		json.NewEncoder(w).Encode(build)
+	}
+	http.HandleFunc("POST /build", submitBuildHandler)
+	http.HandleFunc("POST /builds", submitBuildHandler)
+
+	getBuildHandler := func(w http.ResponseWriter, r *http.Request) {
+		id := r.PathValue("id")
+		build, err := sched.GetBuild(id)
+		if err != nil {
+			http.Error(w, "Failed to retrieve build: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if build == nil {
+			http.Error(w, "Build not found", http.StatusNotFound)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(build)
+	}
+	http.HandleFunc("GET /build/{id}", getBuildHandler)
+	http.HandleFunc("GET /builds/{id}", getBuildHandler)
+
+	http.HandleFunc("GET /builds", func(w http.ResponseWriter, r *http.Request) {
+		builds := sched.GetAllBuilds()
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(builds)
+	})
+
 	// 4. Start the HTTP server
 	httpPort := 8080
 	fmt.Printf("HTTP server listening on :%d\n", httpPort)
 	fmt.Println("Endpoints:")
-	fmt.Println("  POST /submit    — submit a task")
+	fmt.Println("  POST /submit    — submit a single task")
+	fmt.Println("  POST /build     — submit a DAG build with dependencies")
+	fmt.Println("  GET  /build/{id}— get build status and all task states")
 	fmt.Println("  GET  /task/{id} — get task status")
 	fmt.Println("  GET  /tasks     — list all tasks")
 	fmt.Println("  GET  /workers   — list all workers")

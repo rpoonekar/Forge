@@ -139,10 +139,17 @@ func (s *Store) CreateTask(command string) (*model.Task, error) {
 func (s *Store) GetTask(id string) (*model.Task, error) {
 	task := &model.Task{}
 	var startedAt, endedAt, nextRetryAt sql.NullTime
+	var buildID, name sql.NullString
 
-	row := s.db.QueryRow("SELECT id, command, status, worker_id, created_at, started_at, ended_at, output, exit_code, retry_count, max_retries, next_retry_at FROM tasks WHERE id = $1", id)
-	err := row.Scan(&task.ID, &task.Command, &task.Status, &task.WorkerID, &task.CreatedAt, &startedAt, &endedAt, &task.Output, &task.ExitCode, &task.RetryCount, &task.MaxRetries, &nextRetryAt)
+	row := s.db.QueryRow("SELECT id, build_id, name, command, status, worker_id, created_at, started_at, ended_at, output, exit_code, retry_count, max_retries, next_retry_at FROM tasks WHERE id = $1", id)
+	err := row.Scan(&task.ID, &buildID, &name, &task.Command, &task.Status, &task.WorkerID, &task.CreatedAt, &startedAt, &endedAt, &task.Output, &task.ExitCode, &task.RetryCount, &task.MaxRetries, &nextRetryAt)
 
+	if buildID.Valid {
+		task.BuildID = buildID.String
+	}
+	if name.Valid {
+		task.Name = name.String
+	}
 	if startedAt.Valid {
 		task.StartedAt = startedAt.Time
 	}
@@ -185,7 +192,7 @@ func (s *Store) GetTask(id string) (*model.Task, error) {
 func (s *Store) GetAllTasks() ([]*model.Task, error) {
 	tasks := []*model.Task{}
 
-	rows, err := s.db.Query("SELECT id, command, status, worker_id, created_at, started_at, ended_at, output, exit_code, retry_count, max_retries, next_retry_at FROM tasks ORDER BY created_at DESC")
+	rows, err := s.db.Query("SELECT id, build_id, name, command, status, worker_id, created_at, started_at, ended_at, output, exit_code, retry_count, max_retries, next_retry_at FROM tasks ORDER BY created_at DESC")
 	if err != nil {
 		return nil, err
 	}
@@ -194,9 +201,16 @@ func (s *Store) GetAllTasks() ([]*model.Task, error) {
 	for rows.Next() {
 		task := &model.Task{}
 		var startedAt, endedAt, nextRetryAt sql.NullTime
+		var buildID, name sql.NullString
 
-		rows.Scan(&task.ID, &task.Command, &task.Status, &task.WorkerID, &task.CreatedAt, &startedAt, &endedAt, &task.Output, &task.ExitCode, &task.RetryCount, &task.MaxRetries, &nextRetryAt)
+		rows.Scan(&task.ID, &buildID, &name, &task.Command, &task.Status, &task.WorkerID, &task.CreatedAt, &startedAt, &endedAt, &task.Output, &task.ExitCode, &task.RetryCount, &task.MaxRetries, &nextRetryAt)
 
+		if buildID.Valid {
+			task.BuildID = buildID.String
+		}
+		if name.Valid {
+			task.Name = name.String
+		}
 		if startedAt.Valid {
 			task.StartedAt = startedAt.Time
 		}
@@ -320,12 +334,7 @@ func (s *Store) CompleteTask(taskID string, output string, exitCode int) error {
 
 	query := "UPDATE tasks SET status = $1, output = $2, exit_code = $3, ended_at = $4 WHERE id = $5"
 	_, err := s.db.Exec(query, status, output, exitCode, time.Now(), taskID)
-
-	if err != nil {
-		return err
-	}
-
-	return nil
+	return err
 }
 
 // --- Worker methods ---
@@ -545,5 +554,238 @@ func (s *Store) FailTaskPermanently(taskID string) error {
 	query := "UPDATE tasks SET status = 'FAILED', ended_at = $1 WHERE id = $2"
 	_, err := s.db.Exec(query, time.Now(), taskID)
 
+	return err
+}
+
+// --- Stage 8: Build and DAG methods ---
+
+// CreateBuild creates a new build and its DAG tasks in a single database transaction.
+func (s *Store) CreateBuild(tasks []model.TaskSpec) (*model.Build, error) {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return nil, fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	buildID := uuid.NewString()
+	now := time.Now()
+
+	_, err = tx.Exec("INSERT INTO builds (id, status, created_at) VALUES ($1, $2, $3)",
+		buildID, model.BuildStatusPending, now)
+	if err != nil {
+		return nil, fmt.Errorf("failed to insert build: %w", err)
+	}
+
+	nameToID := make(map[string]string)
+	for _, spec := range tasks {
+		nameToID[spec.Name] = uuid.NewString()
+	}
+
+	var createdTasks []*model.Task
+	for _, spec := range tasks {
+		taskID := nameToID[spec.Name]
+
+		initialStatus := model.StatusQueued
+		if len(spec.DependsOn) > 0 {
+			initialStatus = model.StatusBlocked
+		}
+
+		_, err := tx.Exec(`INSERT INTO tasks (id, build_id, name, command, status, created_at, max_retries)
+			VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+			taskID, buildID, spec.Name, spec.Command, initialStatus, now, model.DefaultMaxRetries)
+		if err != nil {
+			return nil, fmt.Errorf("failed to insert task %s: %w", spec.Name, err)
+		}
+
+		for _, depName := range spec.DependsOn {
+			parentID := nameToID[depName]
+			_, err := tx.Exec(`INSERT INTO task_dependencies (task_id, parent_id) VALUES ($1, $2)`,
+				taskID, parentID)
+			if err != nil {
+				return nil, fmt.Errorf("failed to insert task dependency: %w", err)
+			}
+		}
+
+		createdTasks = append(createdTasks, &model.Task{
+			ID:         taskID,
+			BuildID:    buildID,
+			Name:       spec.Name,
+			Command:    spec.Command,
+			Status:     initialStatus,
+			CreatedAt:  now,
+			MaxRetries: model.DefaultMaxRetries,
+		})
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("failed to commit build: %w", err)
+	}
+
+	return &model.Build{
+		ID:        buildID,
+		Status:    model.BuildStatusPending,
+		CreatedAt: now,
+		Tasks:     createdTasks,
+	}, nil
+}
+
+// GetBuild retrieves a build and all of its tasks.
+func (s *Store) GetBuild(buildID string) (*model.Build, error) {
+	b := &model.Build{}
+	var endedAt sql.NullTime
+
+	err := s.db.QueryRow("SELECT id, status, created_at, ended_at FROM builds WHERE id = $1", buildID).
+		Scan(&b.ID, &b.Status, &b.CreatedAt, &endedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if endedAt.Valid {
+		b.EndedAt = endedAt.Time
+	}
+
+	rows, err := s.db.Query("SELECT id, build_id, name, command, status, worker_id, created_at, started_at, ended_at, output, exit_code, retry_count, max_retries FROM tasks WHERE build_id = $1 ORDER BY created_at ASC", buildID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		t := &model.Task{}
+		var buildIDCol, nameCol sql.NullString
+		var startedAt, endedAtCol sql.NullTime
+		if err := rows.Scan(&t.ID, &buildIDCol, &nameCol, &t.Command, &t.Status, &t.WorkerID, &t.CreatedAt, &startedAt, &endedAtCol, &t.Output, &t.ExitCode, &t.RetryCount, &t.MaxRetries); err != nil {
+			return nil, err
+		}
+		t.BuildID = buildIDCol.String
+		t.Name = nameCol.String
+		if startedAt.Valid {
+			t.StartedAt = startedAt.Time
+		}
+		if endedAtCol.Valid {
+			t.EndedAt = endedAtCol.Time
+		}
+		b.Tasks = append(b.Tasks, t)
+	}
+
+	return b, nil
+}
+
+// GetAllBuilds returns all builds in the system.
+func (s *Store) GetAllBuilds() ([]*model.Build, error) {
+	rows, err := s.db.Query("SELECT id, status, created_at, ended_at FROM builds ORDER BY created_at DESC")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var builds []*model.Build
+	for rows.Next() {
+		b := &model.Build{}
+		var endedAt sql.NullTime
+		if err := rows.Scan(&b.ID, &b.Status, &b.CreatedAt, &endedAt); err != nil {
+			return nil, err
+		}
+		if endedAt.Valid {
+			b.EndedAt = endedAt.Time
+		}
+		builds = append(builds, b)
+	}
+	return builds, rows.Err()
+}
+
+// GetBuildGraph returns all tasks in a build and a dependency map (taskID -> list of parentIDs).
+func (s *Store) GetBuildGraph(buildID string) ([]*model.Task, map[string][]string, error) {
+	b, err := s.GetBuild(buildID)
+	if err != nil {
+		return nil, nil, err
+	}
+	if b == nil {
+		return nil, nil, fmt.Errorf("build not found: %s", buildID)
+	}
+
+	rows, err := s.db.Query(`
+		SELECT td.task_id, td.parent_id
+		FROM task_dependencies td
+		JOIN tasks t ON t.id = td.task_id
+		WHERE t.build_id = $1`, buildID)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer rows.Close()
+
+	deps := make(map[string][]string)
+	for rows.Next() {
+		var taskID, parentID string
+		if err := rows.Scan(&taskID, &parentID); err != nil {
+			return nil, nil, err
+		}
+		deps[taskID] = append(deps[taskID], parentID)
+	}
+
+	return b.Tasks, deps, nil
+}
+
+// SetTasksStatus updates the status for a list of task IDs.
+func (s *Store) SetTasksStatus(taskIDs []string, status model.Status) error {
+	for _, id := range taskIDs {
+		var endedAt sql.NullTime
+		if status == model.StatusCanceled || status == model.StatusFailed || status == model.StatusSucceeded {
+			endedAt = sql.NullTime{Time: time.Now(), Valid: true}
+		}
+		_, err := s.db.Exec("UPDATE tasks SET status = $1, ended_at = COALESCE($2, ended_at) WHERE id = $3", status, endedAt, id)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// UpdateBuildStatus recalculates and updates the build status based on its tasks.
+func (s *Store) UpdateBuildStatus(taskID string) error {
+	var buildID sql.NullString
+	err := s.db.QueryRow("SELECT build_id FROM tasks WHERE id = $1", taskID).Scan(&buildID)
+	if err != nil || !buildID.Valid || buildID.String == "" {
+		return nil
+	}
+
+	bid := buildID.String
+	rows, err := s.db.Query("SELECT status, count(*) FROM tasks WHERE build_id = $1 GROUP BY status", bid)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	counts := make(map[model.Status]int)
+	total := 0
+	for rows.Next() {
+		var st model.Status
+		var c int
+		if err := rows.Scan(&st, &c); err == nil {
+			counts[st] = c
+			total += c
+		}
+	}
+
+	var newStatus model.BuildStatus
+	if counts[model.StatusRunning] > 0 {
+		newStatus = model.BuildStatusRunning
+	} else if counts[model.StatusQueued] > 0 || counts[model.StatusBlocked] > 0 || counts[model.StatusRetrying] > 0 {
+		newStatus = model.BuildStatusPending
+	} else if counts[model.StatusSucceeded] == total {
+		newStatus = model.BuildStatusSucceeded
+	} else {
+		newStatus = model.BuildStatusFailed
+	}
+
+	var endedAt *time.Time
+	if newStatus == model.BuildStatusSucceeded || newStatus == model.BuildStatusFailed {
+		now := time.Now()
+		endedAt = &now
+	}
+
+	_, err = s.db.Exec("UPDATE builds SET status = $1, ended_at = $2 WHERE id = $3", newStatus, endedAt, bid)
 	return err
 }

@@ -2,7 +2,7 @@
 
 > A fault-tolerant distributed CI execution engine written in Go.
 
-Forge is a miniature execution platform inspired by the worker infrastructure behind modern CI systems. It accepts dependency-aware builds, schedules tasks across independent workers, and recovers interrupted work when a worker disappears.
+Forge is a miniature execution platform inspired by the worker infrastructure behind modern CI systems (e.g., GitHub Actions, CircleCI). It accepts dependency-aware build pipelines (DAGs), schedules tasks across independent workers, isolates execution in ephemeral Docker containers, and recovers interrupted work when workers fail.
 
 The project is intentionally focused on the execution plane: scheduling, worker coordination, durable state, failure recovery, and isolated workloads.
 
@@ -11,24 +11,24 @@ The project is intentionally focused on the execution plane: scheduling, worker 
 CI systems must coordinate unreliable workers without losing work. Forge explores that problem with a deliberately small, inspectable architecture:
 
 - **Concurrent Go workers** register with the scheduler and pull work over gRPC.
-- **PostgreSQL-backed state** keeps task and worker state durable across scheduler restarts.
+- **PostgreSQL-backed state** keeps task, build, and worker state durable across scheduler restarts.
 - **Lease-based failure detection** identifies workers that stop heartbeating and reassigns their in-flight work with exponential backoff.
-- **Ephemeral Docker containers** isolate commands, capture output, and make task environments reproducible.
-- **DAG scheduling** runs tasks only after their dependencies succeed and rejects cyclic build definitions.
+- **Ephemeral Docker containers** isolate commands, capture stdout/stderr, and make task environments reproducible.
+- **Dynamic DAG scheduling** runs tasks in parallel waves, unlocking downstream tasks only after dependencies succeed, while rejecting cyclic build definitions.
 
 ## Architecture
 
 ```text
-                         HTTP
-   Client  ────────────────────────────────────────────┐
-                                                        v
-                                              ┌─────────────────┐
-                                              │  Go Scheduler   │
-                                              │  - DAG resolver │
-                                              │  - leases       │
-                                              │  - retry policy │
-                                              └───────┬─────────┘
-                                                      │ gRPC
+                         HTTP (REST)
+   Client ─────────────────────────────────────────────┐
+                                                       v
+                                             ┌──────────────────┐
+                                             │   Go Scheduler   │
+                                             │  - DAG resolver  │
+                                             │  - leases        │
+                                             │  - retry policy  │
+                                             └────────┬─────────┘
+                                                      │ gRPC (:50051)
                                       ┌───────────────┼───────────────┐
                                       v               v               v
                                 ┌──────────┐    ┌──────────┐    ┌──────────┐
@@ -40,7 +40,7 @@ CI systems must coordinate unreliable workers without losing work. Forge explore
 
                                       ┌──────────────────────────────┐
                                       │          PostgreSQL          │
-                                      │ tasks, workers, retry state  │
+                                      │ tasks, builds, dependencies  │
                                       └──────────────────────────────┘
 ```
 
@@ -62,101 +62,141 @@ Tasks use at-least-once execution semantics: a task may be reassigned after a fa
 
 ## Dependency-Aware Builds
 
-Builds are expressed as a directed acyclic graph. Forge uses topological scheduling to release work only when every upstream task has succeeded.
+Builds are expressed as a directed acyclic graph (DAG). Forge uses Kahn's algorithm for pre-flight validation and cycle detection, then dynamically transitions tasks from `BLOCKED` to `QUEUED` as prerequisites succeed.
 
 ```text
-test ──> compile ──> package
+       ┌─▶ lint ──┐
+start ─┤          ├─▶ compile ──▶ deploy
+       └─▶ test ──┘
 ```
 
-If `test` fails, `compile` and `package` are never scheduled. Cyclic definitions are rejected before execution begins.
+- `lint` and `test` execute **concurrently** across available workers.
+- `compile` waits until **both** upstream tasks succeed.
+- If `test` fails, `compile` and `deploy` are automatically marked `CANCELED`.
+- Cyclic definitions (e.g. `A ──▶ B ──▶ A`) are rejected at submission time with `HTTP 400`.
 
 ## Quick Start
 
 ### Prerequisites
 
-- Go
-- PostgreSQL
-- Docker with a running Docker daemon
+- **Go** (1.22+)
+- **PostgreSQL** running locally (`postgres://localhost:5432/forge`)
+- **Docker Desktop** running locally (Apple Silicon or Intel)
+- Pull the base execution image:
+  ```bash
+  docker pull alpine:latest
+  ```
 
-### 1. Create the database
+### 1. Initialize the Database
 
 ```bash
 createdb forge
 psql forge < db/schema.sql
 ```
 
-### 2. Start the scheduler
+### 2. Start the Scheduler
 
 ```bash
 go run ./cmd/scheduler
 ```
 
-The scheduler exposes an HTTP API on `:8080` and accepts gRPC workers on `:50051`.
+The scheduler exposes a REST API on `:8080` and a gRPC server on `:50051`.
 
-### 3. Start workers
+### 3. Start Workers
 
 Run each worker in a separate terminal:
 
 ```bash
-go run ./cmd/worker -id worker-1
-go run ./cmd/worker -id worker-2
-go run ./cmd/worker -id worker-3
+# Terminal 2
+go run ./cmd/worker --id worker-1 --image alpine:latest
+
+# Terminal 3
+go run ./cmd/worker --id worker-2 --image alpine:latest
 ```
 
-### 4. Submit a build
+### 4. Submit Workload
 
+#### Option A: Submit a Single Standalone Task
 ```bash
-curl -X POST http://localhost:8080/builds \
+curl -X POST -d '{"command":"echo hello from standalone"}' http://localhost:8080/submit
+```
+
+#### Option B: Submit a Multi-Task Pipeline (DAG)
+```bash
+curl -s -X POST http://localhost:8080/build \
   -H 'Content-Type: application/json' \
   -d '{
     "tasks": [
-      {"id": "test", "image": "golang:latest", "command": "go test ./..."},
-      {"id": "compile", "image": "golang:latest", "command": "go build ./...", "depends_on": ["test"]},
-      {"id": "package", "image": "alpine:latest", "command": "tar -czf app.tar.gz ./app", "depends_on": ["compile"]}
+      {"name": "lint", "command": "sleep 2 && echo lint-passed", "depends_on": []},
+      {"name": "test", "command": "sleep 3 && echo test-passed", "depends_on": []},
+      {"name": "compile", "command": "sleep 2 && echo compile-passed", "depends_on": ["lint", "test"]},
+      {"name": "deploy", "command": "echo deploy-passed", "depends_on": ["compile"]}
+    ]
+  }' | jq .
+```
+
+#### Option C: Test Cycle Rejection (Verification)
+```bash
+curl -i -X POST http://localhost:8080/build \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "tasks": [
+      {"name": "A", "command": "echo A", "depends_on": ["B"]},
+      {"name": "B", "command": "echo B", "depends_on": ["A"]}
     ]
   }'
 ```
+*(Returns `HTTP/1.1 400 Bad Request: Invalid build DAG: cycle detected in task dependencies`)*
 
-Inspect a build and the worker pool:
+### 5. Inspect the System
 
 ```bash
-curl http://localhost:8080/builds/<build-id>
-curl http://localhost:8080/workers
+# View all tasks and their outputs
+curl -s http://localhost:8080/tasks | jq '.[] | {name: .Name, status: .Status, worker: .WorkerID, output: .Output}'
+
+# View all builds
+curl -s http://localhost:8080/builds | jq .
+
+# View a specific build by ID
+curl -s http://localhost:8080/build/<build-id> | jq .
+
+# View registered workers
+curl -s http://localhost:8080/workers | jq .
 ```
 
 ## Project Structure
 
 ```text
 cmd/
-  scheduler/       Scheduler entry point and HTTP API
-  worker/          Worker entry point and execution loop
-db/                PostgreSQL schema
-model/             Task, worker, build, and state-machine models
-proto/             gRPC/Protocol Buffer service contract
-scheduler/         Scheduling, leases, retries, and DAG resolution
+  scheduler/       Scheduler entry point, REST API, and gRPC server
+  worker/          Worker entry point, registration, and heartbeat loop
+dag/               DAG validation (Kahn's algorithm), cycle detection, and runtime resolution
+db/                PostgreSQL unified schema (schema.sql)
+executor/          Docker container lifecycle (create, start, wait, log demux, remove)
+model/             Task, worker, build, and pipeline data models
+proto/             Protocol Buffer definitions and generated gRPC stubs
+scheduler/         Task scheduler, lease checker, retry policy, and failure recovery
 store/             PostgreSQL persistence layer
-worker/            Container execution and log collection
 ```
 
 ## Design Decisions
 
 | Decision | Rationale |
 | --- | --- |
-| gRPC for scheduler-worker traffic | Strongly typed contracts and efficient service-to-service communication. |
-| PostgreSQL as the source of truth | Task state survives scheduler restarts and state transitions can be made atomically. |
-| Pull-based workers | Workers request work when ready, naturally providing backpressure. |
-| Heartbeats and leases | A bounded, practical way to detect unavailable workers and recover their work. |
-| Docker per task | Isolates workloads and creates reproducible execution environments. |
-| DAG scheduling | Models real build and workflow dependencies without scheduling blocked work. |
-
-## Local Security Note
-
-Forge is designed for local development and controlled workloads. Do not expose arbitrary command submission on a public endpoint; a hosted demo should restrict users to predefined, sandboxed build definitions.
+| **gRPC for scheduler-worker traffic** | Strongly typed protobuf contracts, efficient multiplexed HTTP/2 streaming. |
+| **PostgreSQL as source of truth** | Durable state surviving scheduler crashes, atomic transactional updates. |
+| **Pull-based workers** | Workers pull when ready, preventing head-of-line blocking and load imbalances. |
+| **Heartbeats and leases** | Bounded failure detection for crashed workers without distributed consensus overhead. |
+| **Docker execution per task** | Ephemeral, clean-room Linux containers preventing host pollution and cross-task contamination. |
+| **Dynamic DAG scheduling in Go** | Core graph logic lives in Go memory for rapid scheduling, using Postgres strictly for durable state. |
 
 ## Development
 
 ```bash
+# Run unit tests
 go test ./...
+
+# Verify code formatting and correctness
 go vet ./...
 ```
 
@@ -166,6 +206,6 @@ go vet ./...
 - [x] Durable PostgreSQL task and worker state
 - [x] Heartbeats, lease expiry, automatic reassignment, and retry backoff
 - [x] Ephemeral Docker task execution
-- [x] Dependency DAG scheduling and cycle detection
+- [x] Dependency DAG scheduling, cycle detection, and dynamic unlocking
 - [ ] Live build dashboard and WebSocket updates
 - [ ] Prometheus metrics, load testing, and graceful shutdown hardening

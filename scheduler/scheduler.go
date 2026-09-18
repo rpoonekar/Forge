@@ -5,6 +5,7 @@ import (
 	"log"
 	"time"
 
+	"github.com/ronavpoonekar/forge/dag"
 	"github.com/ronavpoonekar/forge/model"
 	"github.com/ronavpoonekar/forge/store"
 )
@@ -110,8 +111,8 @@ func (s *Scheduler) StartLeaseChecker(ctx context.Context, checkInterval, timeou
 					//       s.store.FailTaskPermanently(task.ID)
 					//   }
 					if task.RetryCount < task.MaxRetries {
-						delay := time.Duration(1 << task.RetryCount) * 2 * time.Second
-						log.Printf("Retrying task %s (attempt %d/%d, delay %s)", task.ID, task.RetryCount + 1, task.MaxRetries, delay)
+						delay := time.Duration(1<<task.RetryCount) * 2 * time.Second
+						log.Printf("Retrying task %s (attempt %d/%d, delay %s)", task.ID, task.RetryCount+1, task.MaxRetries, delay)
 						s.store.RetryTask(task.ID, delay)
 					} else {
 						log.Printf("Task %s permanently FAILED (max retries %d exceeded)", task.ID, task.MaxRetries)
@@ -148,6 +149,31 @@ func (s *Scheduler) Submit(command string) *model.Task {
 	return task
 }
 
+// SubmitBuild validates the DAG dependencies and schedules a multi-task build.
+func (s *Scheduler) SubmitBuild(tasks []model.TaskSpec) (*model.Build, error) {
+	// Stage 8: Validate the DAG structure (checks for cycles & invalid deps)
+	if _, err := dag.Validate(tasks); err != nil {
+		return nil, err
+	}
+
+	return s.store.CreateBuild(tasks)
+}
+
+// GetBuild returns a build by ID.
+func (s *Scheduler) GetBuild(id string) (*model.Build, error) {
+	return s.store.GetBuild(id)
+}
+
+// GetAllBuilds returns all builds.
+func (s *Scheduler) GetAllBuilds() []*model.Build {
+	builds, err := s.store.GetAllBuilds()
+	if err != nil {
+		log.Printf("Error getting all builds: %v", err)
+		return nil
+	}
+	return builds
+}
+
 func (s *Scheduler) NextTask(workerID string) *model.Task {
 	task, err := s.store.AssignNextTask(workerID)
 	if err != nil {
@@ -170,6 +196,46 @@ func (s *Scheduler) CompleteTask(taskID string, workerID string, output string, 
 	}
 	if err := s.store.UpdateWorkerStatus(workerID, model.WorkerStatusIdle, "", 1); err != nil {
 		log.Printf("Error updating worker %s: %v", workerID, err)
+	}
+
+	// Stage 8: If this task was part of a DAG build, resolve dependencies in Go!
+	task, _ := s.store.GetTask(taskID)
+	if task != nil && task.BuildID != "" {
+		s.resolveBuildDependencies(task.BuildID, taskID, exitCode)
+	}
+}
+
+// resolveBuildDependencies orchestrates pipeline advancement using pure Go DAG logic.
+func (s *Scheduler) resolveBuildDependencies(buildID string, completedTaskID string, exitCode int) {
+	tasks, deps, err := s.store.GetBuildGraph(buildID)
+	if err != nil {
+		log.Printf("Error getting build graph for %s: %v", buildID, err)
+		return
+	}
+
+	if exitCode == 0 {
+		// Task succeeded: call your Go DAG algorithm to find which BLOCKED tasks can now run!
+		readyIDs := dag.FindRunnableTasks(tasks, deps)
+		if len(readyIDs) > 0 {
+			log.Printf("Build %s: unlocking %d task(s) to QUEUED: %v", buildID, len(readyIDs), readyIDs)
+			if err := s.store.SetTasksStatus(readyIDs, model.StatusQueued); err != nil {
+				log.Printf("Error unlocking tasks for build %s: %v", buildID, err)
+			}
+		}
+	} else {
+		// Task failed: cancel downstream blocked tasks that depended on this failed task
+		canceledIDs := dag.FindDownstreamBlockedTasks(completedTaskID, deps, tasks)
+		if len(canceledIDs) > 0 {
+			log.Printf("Build %s: canceling %d downstream task(s): %v", buildID, len(canceledIDs), canceledIDs)
+			if err := s.store.SetTasksStatus(canceledIDs, model.StatusCanceled); err != nil {
+				log.Printf("Error canceling tasks for build %s: %v", buildID, err)
+			}
+		}
+	}
+
+	// Update overall build status (PENDING / RUNNING / SUCCEEDED / FAILED)
+	if err := s.store.UpdateBuildStatus(completedTaskID); err != nil {
+		log.Printf("Error updating build status for %s: %v", buildID, err)
 	}
 }
 
