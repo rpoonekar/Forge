@@ -6,13 +6,13 @@ import "time"
 type Status string
 
 const (
-	StatusBlocked   Status = "BLOCKED" // Stage 8: waiting for dependencies to complete
-	StatusQueued    Status = "QUEUED"
-	StatusRunning   Status = "RUNNING"
-	StatusRetrying  Status = "RETRYING" // Stage 6: task is waiting to be retried
-	StatusSucceeded Status = "SUCCEEDED"
-	StatusFailed    Status = "FAILED"
-	StatusCanceled  Status = "CANCELED" // Stage 8: dependency failed, task cannot run
+	StatusBlocked   Status = "BLOCKED"   // waiting for upstream dependencies to complete
+	StatusQueued    Status = "QUEUED"    // ready for worker assignment
+	StatusRunning   Status = "RUNNING"   // actively executing on a worker
+	StatusRetrying  Status = "RETRYING"  // waiting for exponential backoff before retry
+	StatusSucceeded Status = "SUCCEEDED" // completed with exit code 0
+	StatusFailed    Status = "FAILED"    // completed with non-zero exit code or retries exhausted
+	StatusCanceled  Status = "CANCELED"  // upstream dependency failed; execution skipped
 )
 
 const DefaultMaxRetries = 3
@@ -20,17 +20,17 @@ const DefaultMaxRetries = 3
 // Task represents a single unit of work to be executed.
 type Task struct {
 	ID          string
-	BuildID     string // Stage 8: which build this task belongs to
-	Name        string // Stage 8: task identifier in the build (e.g. "lint", "test")
+	BuildID     string // parent build ID (empty if standalone task)
+	Name        string // pipeline stage name (e.g. "lint", "test")
 	Command     string
 	Status      Status
-	WorkerID    string // which worker is running (or ran) this task
+	WorkerID    string // worker currently running (or that ran) this task
 	CreatedAt   time.Time
 	StartedAt   time.Time
 	EndedAt     time.Time
-	Output      string // captured stdout/stderr from execution
+	Output      string // captured stdout/stderr from container execution
 	ExitCode    int
-	RetryCount  int       // Stage 6: how many times this task has been retried
-	MaxRetries  int       // Stage 6: max retry attempts allowed (default: 3)
-	NextRetryAt time.Time // Stage 6: when this task is eligible for retry
+	RetryCount  int       // number of retry attempts executed so far
+	MaxRetries  int       // maximum retry attempts allowed
+	NextRetryAt time.Time // earliest timestamp eligible for retry
 }

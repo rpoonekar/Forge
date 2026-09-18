@@ -5,37 +5,19 @@ import (
 	"fmt"
 	"time"
 
-	_ "github.com/lib/pq" // PostgreSQL driver — the underscore import registers it with database/sql
+	_ "github.com/lib/pq"
 
 	"github.com/google/uuid"
 	"github.com/ronavpoonekar/forge/model"
 )
 
-// Store wraps a PostgreSQL connection and provides methods for reading/writing
-// tasks and workers.
-//
-// This replaces the in-memory maps from Stages 1-3. Every method here
-// corresponds to a map operation the scheduler used to do directly:
-//
-//	s.tasks[id] = task          →  store.CreateTask(command)
-//	task := s.tasks[id]         →  store.GetTask(id)
-//	s.queue = s.queue[1:]       →  store.AssignNextTask(workerID)
-//	s.workers[id] = worker      →  store.RegisterWorker(id)
-//
-// The big difference: data is on disk now. Kill the scheduler, restart it,
-// and all tasks and workers are still there.
+// Store wraps a PostgreSQL connection and provides methods for reading and
+// writing tasks, workers, builds, and dependency edges to persistent storage.
 type Store struct {
 	db *sql.DB
 }
 
-// New opens a connection to PostgreSQL and returns a Store.
-//
-// The connStr is a PostgreSQL connection string like:
-//
-//	"postgres://localhost:5432/forge?sslmode=disable"
-//
-// sql.Open doesn't actually connect — it just validates the driver name.
-// db.Ping() actually tests the connection.
+// New opens a connection to PostgreSQL and verifies connectivity.
 func New(connStr string) (*Store, error) {
 	db, err := sql.Open("postgres", connStr)
 	if err != nil {
@@ -56,93 +38,43 @@ func (s *Store) Close() error {
 
 // --- Task methods ---
 
-// CreateTask inserts a new task into the database with status QUEUED.
-//
-// This replaces:
-//
-//	id := GenerateID()
-//	task := &model.Task{ID: id, Command: command, Status: "QUEUED", ...}
-//	s.tasks[id] = task
-//	s.queue = append(s.queue, id)
-//
-// In SQL, there's no separate "queue" — we just query for tasks WHERE status = 'QUEUED'
-// ordered by created_at. The queue IS the query.
-//
-// TODO (Step 1): Implement this method
-//
-// SQL to use:
-//
-//	INSERT INTO tasks (id, command, status, created_at)
-//	VALUES ($1, $2, $3, $4)
-//
-// Steps:
-//  1. Generate a UUID: uuid.NewString()
-//  2. Set created_at to time.Now()
-//  3. Execute the INSERT with s.db.Exec(query, args...)
-//  4. If err != nil, return nil, err
-//  5. Build and return a *model.Task with the values you just inserted
-//
-// Helpful:
-//
-//	_, err := s.db.Exec("INSERT INTO tasks (id, command, status, created_at) VALUES ($1, $2, $3, $4)",
-//	    id, command, "QUEUED", createdAt)
+// CreateTask inserts a new standalone task into the database with status QUEUED.
 func (s *Store) CreateTask(command string) (*model.Task, error) {
 	id := uuid.NewString()
-	created_at := time.Now()
+	createdAt := time.Now()
 	status := model.StatusQueued
 	maxRetries := model.DefaultMaxRetries
 
-	_, err := s.db.Exec("INSERT INTO tasks (id, command, status, created_at, max_retries) VALUES ($1, $2, $3, $4, $5)", id, command, status, created_at, maxRetries)
-
+	query := `INSERT INTO tasks (id, command, status, created_at, max_retries)
+	          VALUES ($1, $2, $3, $4, $5)`
+	_, err := s.db.Exec(query, id, command, status, createdAt, maxRetries)
 	if err != nil {
 		return nil, err
 	}
 
-	task := &model.Task{
+	return &model.Task{
 		ID:         id,
-		CreatedAt:  created_at,
+		CreatedAt:  createdAt,
 		Status:     status,
 		Command:    command,
 		MaxRetries: maxRetries,
-	}
-
-	return task, nil
+	}, nil
 }
 
 // GetTask retrieves a single task by ID.
-//
-// This replaces: task := s.tasks[id]
-//
-// TODO (Step 2): Implement this method
-//
-// SQL to use:
-//
-//	SELECT id, command, status, worker_id, created_at, started_at, ended_at, output, exit_code
-//	FROM tasks WHERE id = $1
-//
-// Steps:
-//  1. Execute the query with s.db.QueryRow(query, id)
-//  2. Create a model.Task
-//  3. Call row.Scan(&task.ID, &task.Command, ...) to populate it
-//  4. Handle sql.ErrNoRows — return nil, nil (task not found, not an error)
-//  5. Handle other errors — return nil, err
-//  6. Return the task
-//
-// Important: started_at and ended_at can be NULL in the database (task hasn't
-// started or ended yet). Use sql.NullTime to handle this:
-//
-//	var startedAt, endedAt sql.NullTime
-//	row.Scan(..., &startedAt, &endedAt, ...)
-//	if startedAt.Valid {
-//	    task.StartedAt = startedAt.Time
-//	}
 func (s *Store) GetTask(id string) (*model.Task, error) {
 	task := &model.Task{}
 	var startedAt, endedAt, nextRetryAt sql.NullTime
 	var buildID, name sql.NullString
 
-	row := s.db.QueryRow("SELECT id, build_id, name, command, status, worker_id, created_at, started_at, ended_at, output, exit_code, retry_count, max_retries, next_retry_at FROM tasks WHERE id = $1", id)
-	err := row.Scan(&task.ID, &buildID, &name, &task.Command, &task.Status, &task.WorkerID, &task.CreatedAt, &startedAt, &endedAt, &task.Output, &task.ExitCode, &task.RetryCount, &task.MaxRetries, &nextRetryAt)
+	query := `SELECT id, build_id, name, command, status, worker_id, created_at,
+	                 started_at, ended_at, output, exit_code, retry_count,
+	                 max_retries, next_retry_at
+	          FROM tasks WHERE id = $1`
+	row := s.db.QueryRow(query, id)
+	err := row.Scan(&task.ID, &buildID, &name, &task.Command, &task.Status, &task.WorkerID,
+		&task.CreatedAt, &startedAt, &endedAt, &task.Output, &task.ExitCode,
+		&task.RetryCount, &task.MaxRetries, &nextRetryAt)
 
 	if buildID.Valid {
 		task.BuildID = buildID.String
@@ -170,40 +102,29 @@ func (s *Store) GetTask(id string) (*model.Task, error) {
 	return task, nil
 }
 
-// GetAllTasks retrieves all tasks.
-//
-// This replaces: iterating over s.tasks map
-//
-// TODO (Step 3): Implement this method
-//
-// SQL to use:
-//
-//	SELECT id, command, status, worker_id, created_at, started_at, ended_at, output, exit_code
-//	FROM tasks ORDER BY created_at DESC
-//
-// Steps:
-//  1. Execute the query with s.db.Query(query)
-//  2. defer rows.Close()
-//  3. Loop: for rows.Next() { ... row.Scan(...) ... }
-//  4. Check rows.Err() after the loop
-//  5. Return the slice of tasks
-//
-// This is similar to GetTask but you're scanning multiple rows instead of one.
+// GetAllTasks retrieves all tasks ordered by creation time descending.
 func (s *Store) GetAllTasks() ([]*model.Task, error) {
-	tasks := []*model.Task{}
-
-	rows, err := s.db.Query("SELECT id, build_id, name, command, status, worker_id, created_at, started_at, ended_at, output, exit_code, retry_count, max_retries, next_retry_at FROM tasks ORDER BY created_at DESC")
+	query := `SELECT id, build_id, name, command, status, worker_id, created_at,
+	                 started_at, ended_at, output, exit_code, retry_count,
+	                 max_retries, next_retry_at
+	          FROM tasks ORDER BY created_at DESC`
+	rows, err := s.db.Query(query)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 
+	var tasks []*model.Task
 	for rows.Next() {
 		task := &model.Task{}
 		var startedAt, endedAt, nextRetryAt sql.NullTime
 		var buildID, name sql.NullString
 
-		rows.Scan(&task.ID, &buildID, &name, &task.Command, &task.Status, &task.WorkerID, &task.CreatedAt, &startedAt, &endedAt, &task.Output, &task.ExitCode, &task.RetryCount, &task.MaxRetries, &nextRetryAt)
+		if err := rows.Scan(&task.ID, &buildID, &name, &task.Command, &task.Status,
+			&task.WorkerID, &task.CreatedAt, &startedAt, &endedAt, &task.Output,
+			&task.ExitCode, &task.RetryCount, &task.MaxRetries, &nextRetryAt); err != nil {
+			return nil, err
+		}
 
 		if buildID.Valid {
 			task.BuildID = buildID.String
@@ -224,65 +145,48 @@ func (s *Store) GetAllTasks() ([]*model.Task, error) {
 		tasks = append(tasks, task)
 	}
 
-	if rows.Err() != nil {
-		return nil, rows.Err()
-	}
-
-	return tasks, nil
+	return tasks, rows.Err()
 }
 
-// AssignNextTask atomically grabs the next QUEUED task and assigns it to a worker.
+// AssignNextTask atomically grabs the oldest eligible QUEUED task and assigns it
+// to a worker.
 //
-// This replaces the scheduler's NextTask():
-//
-//	id := s.queue[0]
-//	s.queue = s.queue[1:]
-//	task.Status = RUNNING
-//	task.WorkerID = workerID
-//	task.StartedAt = time.Now()
-//
-// In SQL, we do this in ONE query using UPDATE ... RETURNING:
-//
-//	UPDATE tasks
-//	SET status = 'RUNNING', worker_id = $1, started_at = $2
-//	WHERE id = (
-//	    SELECT id FROM tasks WHERE status = 'QUEUED' ORDER BY created_at LIMIT 1
-//	)
-//	RETURNING id, command, status, worker_id, created_at, started_at, ended_at, output, exit_code
-//
-// This is powerful because:
-//   - The subquery (SELECT ... LIMIT 1) finds the oldest QUEUED task
-//   - The UPDATE atomically changes it to RUNNING and assigns the worker
-//   - RETURNING gives us the updated row back
-//   - If two workers call this at the same time, PostgreSQL ensures they
-//     get DIFFERENT tasks (the database handles the concurrency for us!)
-//
-// TODO (Step 4): Implement this method
-//
-// Steps:
-//  1. Run the query above with s.db.QueryRow(query, workerID, time.Now())
-//  2. Scan the result into a model.Task (same as GetTask)
-//  3. If sql.ErrNoRows — no queued tasks, return nil, nil
-//  4. Return the task
+// Uses a Common Table Expression (CTE) with FOR UPDATE SKIP LOCKED to prevent
+// race conditions when multiple workers poll simultaneously.
 func (s *Store) AssignNextTask(workerID string) (*model.Task, error) {
-	// Stage 6: the subquery now also checks next_retry_at
-	// A task is eligible if it's QUEUED and either:
-	//   - next_retry_at IS NULL (never been retried, fresh task)
-	//   - next_retry_at <= NOW() (retry delay has passed)
-	query := `UPDATE tasks SET status = 'RUNNING', worker_id = $1, started_at = $2
-		WHERE id = (
-			SELECT id FROM tasks
+	query := `
+		WITH next_task AS (
+			SELECT id
+			FROM tasks
 			WHERE status = 'QUEUED' AND (next_retry_at IS NULL OR next_retry_at <= NOW())
-			ORDER BY created_at LIMIT 1
+			ORDER BY created_at
+			LIMIT 1
+			FOR UPDATE SKIP LOCKED
 		)
-		RETURNING id, command, status, worker_id, created_at, started_at, ended_at, output, exit_code, retry_count, max_retries, next_retry_at`
+		UPDATE tasks
+		SET status = 'RUNNING', worker_id = $1, started_at = $2
+		FROM next_task
+		WHERE tasks.id = next_task.id
+		RETURNING tasks.id, tasks.build_id, tasks.name, tasks.command, tasks.status,
+		          tasks.worker_id, tasks.created_at, tasks.started_at, tasks.ended_at,
+		          tasks.output, tasks.exit_code, tasks.retry_count, tasks.max_retries,
+		          tasks.next_retry_at`
 
 	task := &model.Task{}
 	var startedAt, endedAt, nextRetryAt sql.NullTime
+	var buildID, name sql.NullString
 
 	row := s.db.QueryRow(query, workerID, time.Now())
-	err := row.Scan(&task.ID, &task.Command, &task.Status, &task.WorkerID, &task.CreatedAt, &startedAt, &endedAt, &task.Output, &task.ExitCode, &task.RetryCount, &task.MaxRetries, &nextRetryAt)
+	err := row.Scan(&task.ID, &buildID, &name, &task.Command, &task.Status, &task.WorkerID,
+		&task.CreatedAt, &startedAt, &endedAt, &task.Output, &task.ExitCode,
+		&task.RetryCount, &task.MaxRetries, &nextRetryAt)
 
+	if buildID.Valid {
+		task.BuildID = buildID.String
+	}
+	if name.Valid {
+		task.Name = name.String
+	}
 	if startedAt.Valid {
 		task.StartedAt = startedAt.Time
 	}
@@ -304,199 +208,125 @@ func (s *Store) AssignNextTask(workerID string) (*model.Task, error) {
 }
 
 // CompleteTask updates a task's status, output, and exit code.
-//
-// This replaces:
-//
-//	task.Status = SUCCEEDED/FAILED
-//	task.Output = output
-//	task.ExitCode = exitCode
-//	task.EndedAt = time.Now()
-//
-// TODO (Step 5): Implement this method
-//
-// SQL to use:
-//
-//	UPDATE tasks SET status = $1, output = $2, exit_code = $3, ended_at = $4
-//	WHERE id = $5
-//
-// Steps:
-//  1. Determine status: if exitCode == 0, "SUCCEEDED", else "FAILED"
-//  2. Execute the UPDATE
-//  3. Return error if any
 func (s *Store) CompleteTask(taskID string, output string, exitCode int) error {
 	var status model.Status
-
 	if exitCode == 0 {
 		status = model.StatusSucceeded
 	} else {
 		status = model.StatusFailed
 	}
 
-	query := "UPDATE tasks SET status = $1, output = $2, exit_code = $3, ended_at = $4 WHERE id = $5"
+	query := `UPDATE tasks
+	          SET status = $1, output = $2, exit_code = $3, ended_at = $4
+	          WHERE id = $5`
 	_, err := s.db.Exec(query, status, output, exitCode, time.Now(), taskID)
 	return err
 }
 
 // --- Worker methods ---
 
-// RegisterWorker inserts or updates a worker in the database.
-//
-// This replaces:
-//
-//	s.workers[workerID] = &model.Worker{...}
-//
-// We use INSERT ... ON CONFLICT (upsert) so that:
-//   - First time: inserts a new row
-//   - Re-registration: updates last_seen
-//
-// TODO (Step 6): Implement this method
-//
-// SQL to use:
-//
-//	INSERT INTO workers (id, status, registered_at, last_seen)
-//	VALUES ($1, 'IDLE', $2, $2)
-//	ON CONFLICT (id) DO UPDATE SET last_seen = $2
-//	RETURNING id, status, current_task, registered_at, last_seen, tasks_run
-//
-// Steps:
-//  1. Execute the query with s.db.QueryRow(query, workerID, time.Now())
-//  2. Scan into a model.Worker
-//  3. Return the worker
+// RegisterWorker inserts or updates a worker in the database using an upsert.
 func (s *Store) RegisterWorker(workerID string) (*model.Worker, error) {
 	worker := &model.Worker{}
 
-	query := "INSERT INTO workers (id, status, registered_at, last_seen) VALUES ($1, 'IDLE', $2, $2) ON CONFLICT (id) DO UPDATE SET last_seen = $2 RETURNING id, status, current_task, registered_at, last_seen, tasks_run"
+	query := `INSERT INTO workers (id, status, registered_at, last_seen)
+	          VALUES ($1, 'IDLE', $2, $2)
+	          ON CONFLICT (id) DO UPDATE SET last_seen = $2
+	          RETURNING id, status, current_task, registered_at, last_seen, tasks_run`
 	row := s.db.QueryRow(query, workerID, time.Now())
 
-	var registered_at, last_seen sql.NullTime
-	err := row.Scan(&worker.ID, &worker.Status, &worker.CurrentTask, &registered_at, &last_seen, &worker.TasksRun)
+	var registeredAt, lastSeen sql.NullTime
+	err := row.Scan(&worker.ID, &worker.Status, &worker.CurrentTask, &registeredAt, &lastSeen, &worker.TasksRun)
 
-	if registered_at.Valid {
-		worker.RegisteredAt = registered_at.Time
+	if registeredAt.Valid {
+		worker.RegisteredAt = registeredAt.Time
 	}
-	if last_seen.Valid {
-		worker.LastSeen = last_seen.Time
-	}
-
-	if err != nil {
-		return nil, err
+	if lastSeen.Valid {
+		worker.LastSeen = lastSeen.Time
 	}
 
-	return worker, nil
+	return worker, err
 }
 
-// UpdateWorkerStatus updates a worker's status, current task, and last_seen.
-//
-// Called when:
-//   - A worker takes a task (status = BUSY, currentTask = taskID)
-//   - A worker completes a task (status = IDLE, currentTask = "")
-//   - A worker polls with no work (just updates last_seen)
-//
-// TODO (Step 7): Implement this method
-//
-// SQL to use:
-//
-//	UPDATE workers SET status = $1, current_task = $2, last_seen = $3, tasks_run = tasks_run + $4
-//	WHERE id = $5
-//
-// Parameters: status, currentTask, time.Now(), tasksRunDelta (0 or 1), workerID
+// UpdateWorkerStatus updates a worker's status, current task, and last_seen timestamp.
 func (s *Store) UpdateWorkerStatus(workerID string, status model.WorkerStatus, currentTask string, tasksRunDelta int) error {
-	query := "UPDATE workers SET status = $1, current_task = $2, last_seen = $3, tasks_run = tasks_run + $4 WHERE id = $5"
-
+	query := `UPDATE workers
+	          SET status = $1, current_task = $2, last_seen = $3, tasks_run = tasks_run + $4
+	          WHERE id = $5`
 	_, err := s.db.Exec(query, status, currentTask, time.Now(), tasksRunDelta, workerID)
-
 	return err
 }
 
-// GetAllWorkers retrieves all workers.
-//
-// TODO (Step 8): Implement this method
-//
-// Same pattern as GetAllTasks but for the workers table.
+// GetAllWorkers retrieves all registered workers.
 func (s *Store) GetAllWorkers() ([]*model.Worker, error) {
-	workers := []*model.Worker{}
-
-	rows, err := s.db.Query("SELECT id, status, current_task, registered_at, last_seen, tasks_run FROM workers ORDER BY registered_at DESC")
+	query := `SELECT id, status, current_task, registered_at, last_seen, tasks_run
+	          FROM workers ORDER BY registered_at DESC`
+	rows, err := s.db.Query(query)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 
+	var workers []*model.Worker
 	for rows.Next() {
 		worker := &model.Worker{}
-
-		rows.Scan(&worker.ID, &worker.Status, &worker.CurrentTask, &worker.RegisteredAt, &worker.LastSeen, &worker.TasksRun)
-
+		if err := rows.Scan(&worker.ID, &worker.Status, &worker.CurrentTask,
+			&worker.RegisteredAt, &worker.LastSeen, &worker.TasksRun); err != nil {
+			return nil, err
+		}
 		workers = append(workers, worker)
 	}
 
-	if rows.Err() != nil {
-		return nil, rows.Err()
-	}
-
-	return workers, nil
+	return workers, rows.Err()
 }
 
-// --- Stage 5: Heartbeat/Lease methods ---
+// --- Heartbeat and Lease recovery methods ---
 
-// GetStaleWorkers returns workers whose last_seen is older than the given threshold.
-// These workers are presumed dead.
-//
-// For example, if threshold is 15 seconds, this returns workers that haven't
-// sent a heartbeat in the last 15 seconds.
-//
-// SQL:
-//
-//	SELECT id, status, current_task, registered_at, last_seen, tasks_run
-//	FROM workers
-//	WHERE last_seen < $1 AND status != 'OFFLINE'
-//
-// The $1 parameter is: time.Now().Add(-threshold)
-// So if threshold is 15s and now is 12:00:15, we look for last_seen < 12:00:00
-//
-// TODO (Step 1): Implement this method
-//
-// Same scanning pattern as GetAllWorkers, but with a WHERE clause.
+// GetStaleWorkers returns workers whose last_seen timestamp is older than the threshold.
 func (s *Store) GetStaleWorkers(threshold time.Duration) ([]*model.Worker, error) {
-	workers := []*model.Worker{}
-
-	rows, err := s.db.Query("SELECT id, status, current_task, registered_at, last_seen, tasks_run FROM workers WHERE last_seen < $1 AND status != 'OFFLINE'", time.Now().Add(-threshold))
+	query := `SELECT id, status, current_task, registered_at, last_seen, tasks_run
+	          FROM workers
+	          WHERE last_seen < $1 AND status != 'OFFLINE'`
+	rows, err := s.db.Query(query, time.Now().Add(-threshold))
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 
+	var workers []*model.Worker
 	for rows.Next() {
 		worker := &model.Worker{}
-
-		rows.Scan(&worker.ID, &worker.Status, &worker.CurrentTask, &worker.RegisteredAt, &worker.LastSeen, &worker.TasksRun)
-
+		if err := rows.Scan(&worker.ID, &worker.Status, &worker.CurrentTask,
+			&worker.RegisteredAt, &worker.LastSeen, &worker.TasksRun); err != nil {
+			return nil, err
+		}
 		workers = append(workers, worker)
 	}
 
-	if rows.Err() != nil {
-		return nil, rows.Err()
-	}
-
-	return workers, nil
+	return workers, rows.Err()
 }
 
 // GetRunningTasksForWorker returns all RUNNING tasks assigned to a specific worker.
-// Used by the lease checker to decide per-task whether to retry or fail.
 func (s *Store) GetRunningTasksForWorker(workerID string) ([]*model.Task, error) {
-	tasks := []*model.Task{}
-
-	rows, err := s.db.Query("SELECT id, command, status, worker_id, created_at, started_at, ended_at, output, exit_code, retry_count, max_retries, next_retry_at FROM tasks WHERE worker_id = $1 AND status = 'RUNNING'", workerID)
+	query := `SELECT id, command, status, worker_id, created_at, started_at, ended_at,
+	                 output, exit_code, retry_count, max_retries, next_retry_at
+	          FROM tasks WHERE worker_id = $1 AND status = 'RUNNING'`
+	rows, err := s.db.Query(query, workerID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 
+	var tasks []*model.Task
 	for rows.Next() {
 		task := &model.Task{}
 		var startedAt, endedAt, nextRetryAt sql.NullTime
 
-		rows.Scan(&task.ID, &task.Command, &task.Status, &task.WorkerID, &task.CreatedAt, &startedAt, &endedAt, &task.Output, &task.ExitCode, &task.RetryCount, &task.MaxRetries, &nextRetryAt)
+		if err := rows.Scan(&task.ID, &task.Command, &task.Status, &task.WorkerID,
+			&task.CreatedAt, &startedAt, &endedAt, &task.Output, &task.ExitCode,
+			&task.RetryCount, &task.MaxRetries, &nextRetryAt); err != nil {
+			return nil, err
+		}
 
 		if startedAt.Valid {
 			task.StartedAt = startedAt.Time
@@ -514,50 +344,25 @@ func (s *Store) GetRunningTasksForWorker(workerID string) ([]*model.Task, error)
 	return tasks, rows.Err()
 }
 
-// RetryTask increments the retry count and moves a task back to QUEUED
-// with a delay before it's eligible to be picked up again.
-//
-// The delay is exponential backoff: baseDelay * 2^(retryCount)
-// So with a 2s base: 2s, 4s, 8s, 16s...
-//
-// TODO (Step 1): Implement this method
-//
-// SQL:
-//
-//	UPDATE tasks
-//	SET status = 'QUEUED', worker_id = '', started_at = NULL,
-//	    retry_count = retry_count + 1, next_retry_at = $1
-//	WHERE id = $2
-//
-// Steps:
-//  1. Calculate the retry delay: baseDelay * 2^(currentRetryCount)
-//     Use: time.Duration(1 << task.RetryCount) * baseDelay
-//     (1 << n is the same as 2^n using bit shifting)
-//  2. Calculate next_retry_at: time.Now().Add(delay)
-//  3. Execute the UPDATE
+// RetryTask increments a task's retry count and returns it to QUEUED status
+// with a next_retry_at eligibility timestamp calculated via exponential backoff.
 func (s *Store) RetryTask(taskID string, retryDelay time.Duration) error {
-	query := "UPDATE tasks SET status = 'QUEUED', worker_id = '', started_at = NULL, retry_count = retry_count + 1, next_retry_at = $1 WHERE id = $2"
-
+	query := `UPDATE tasks
+	          SET status = 'QUEUED', worker_id = '', started_at = NULL,
+	              retry_count = retry_count + 1, next_retry_at = $1
+	          WHERE id = $2`
 	_, err := s.db.Exec(query, time.Now().Add(retryDelay), taskID)
-
 	return err
 }
 
-// FailTaskPermanently marks a task as permanently FAILED (max retries exceeded).
-//
-// TODO (Step 2): Implement this method
-//
-// SQL:
-//
-//	UPDATE tasks SET status = 'FAILED', ended_at = $1 WHERE id = $2
+// FailTaskPermanently marks a task as permanently FAILED when max retries is exceeded.
 func (s *Store) FailTaskPermanently(taskID string) error {
-	query := "UPDATE tasks SET status = 'FAILED', ended_at = $1 WHERE id = $2"
+	query := `UPDATE tasks SET status = 'FAILED', ended_at = $1 WHERE id = $2`
 	_, err := s.db.Exec(query, time.Now(), taskID)
-
 	return err
 }
 
-// --- Stage 8: Build and DAG methods ---
+// --- Build and DAG methods ---
 
 // CreateBuild creates a new build and its DAG tasks in a single database transaction.
 func (s *Store) CreateBuild(tasks []model.TaskSpec) (*model.Build, error) {
@@ -634,8 +439,8 @@ func (s *Store) GetBuild(buildID string) (*model.Build, error) {
 	b := &model.Build{}
 	var endedAt sql.NullTime
 
-	err := s.db.QueryRow("SELECT id, status, created_at, ended_at FROM builds WHERE id = $1", buildID).
-		Scan(&b.ID, &b.Status, &b.CreatedAt, &endedAt)
+	query := "SELECT id, status, created_at, ended_at FROM builds WHERE id = $1"
+	err := s.db.QueryRow(query, buildID).Scan(&b.ID, &b.Status, &b.CreatedAt, &endedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -646,7 +451,10 @@ func (s *Store) GetBuild(buildID string) (*model.Build, error) {
 		b.EndedAt = endedAt.Time
 	}
 
-	rows, err := s.db.Query("SELECT id, build_id, name, command, status, worker_id, created_at, started_at, ended_at, output, exit_code, retry_count, max_retries FROM tasks WHERE build_id = $1 ORDER BY created_at ASC", buildID)
+	taskQuery := `SELECT id, build_id, name, command, status, worker_id, created_at,
+	                     started_at, ended_at, output, exit_code, retry_count, max_retries
+	              FROM tasks WHERE build_id = $1 ORDER BY created_at ASC`
+	rows, err := s.db.Query(taskQuery, buildID)
 	if err != nil {
 		return nil, err
 	}
@@ -656,7 +464,9 @@ func (s *Store) GetBuild(buildID string) (*model.Build, error) {
 		t := &model.Task{}
 		var buildIDCol, nameCol sql.NullString
 		var startedAt, endedAtCol sql.NullTime
-		if err := rows.Scan(&t.ID, &buildIDCol, &nameCol, &t.Command, &t.Status, &t.WorkerID, &t.CreatedAt, &startedAt, &endedAtCol, &t.Output, &t.ExitCode, &t.RetryCount, &t.MaxRetries); err != nil {
+		if err := rows.Scan(&t.ID, &buildIDCol, &nameCol, &t.Command, &t.Status,
+			&t.WorkerID, &t.CreatedAt, &startedAt, &endedAtCol, &t.Output,
+			&t.ExitCode, &t.RetryCount, &t.MaxRetries); err != nil {
 			return nil, err
 		}
 		t.BuildID = buildIDCol.String
@@ -787,5 +597,11 @@ func (s *Store) UpdateBuildStatus(taskID string) error {
 	}
 
 	_, err = s.db.Exec("UPDATE builds SET status = $1, ended_at = $2 WHERE id = $3", newStatus, endedAt, bid)
+	return err
+}
+
+// ResetTables wipes the task and build tables (useful for clean testing).
+func (s *Store) ResetTables() error {
+	_, err := s.db.Exec("TRUNCATE builds, tasks, task_dependencies CASCADE")
 	return err
 }

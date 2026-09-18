@@ -7,11 +7,14 @@ import (
 	"github.com/ronavpoonekar/forge/proto/forgepb"
 )
 
+// GRPCServer implements the ForgeServiceServer protobuf contract, handling
+// worker registration, task polling, result reporting, and heartbeats.
 type GRPCServer struct {
 	forgepb.UnimplementedForgeServiceServer
 	scheduler *Scheduler
 }
 
+// NewGRPCServer returns a new GRPCServer backed by the scheduler.
 func NewGRPCServer(sched *Scheduler) *GRPCServer {
 	return &GRPCServer{
 		scheduler: sched,
@@ -45,19 +48,7 @@ func (s *GRPCServer) ReportResult(ctx context.Context, req *forgepb.ReportResult
 	return &forgepb.ReportResultResponse{Ok: true}, nil
 }
 
-// Heartbeat handles the Heartbeat RPC — called every few seconds by each worker.
-//
-// All it does is update the worker's last_seen timestamp. The lease checker
-// goroutine in the scheduler uses this timestamp to detect dead workers.
-//
-// TODO (Step 4): Implement this method
-//
-// Steps:
-//  1. Call s.scheduler.RegisterWorker(req.WorkerId)
-//     (RegisterWorker already does an upsert that updates last_seen — we can reuse it)
-//  2. Return ok = true
-//
-// That's it — a heartbeat is just "hey, update my last_seen."
+// Heartbeat handles worker liveness updates to renew leases in the scheduler.
 func (s *GRPCServer) Heartbeat(ctx context.Context, req *forgepb.HeartbeatRequest) (*forgepb.HeartbeatResponse, error) {
 	s.scheduler.RegisterWorker(req.WorkerId)
 	return &forgepb.HeartbeatResponse{Ok: true}, nil
