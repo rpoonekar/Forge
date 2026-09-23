@@ -2,6 +2,8 @@
 
 > A fault-tolerant distributed CI execution engine written in Go.
 
+<img width="3022" height="1304" alt="image" src="https://github.com/user-attachments/assets/b777ab4b-443f-4738-9a83-7dd65afb2d44" />
+
 Forge is a miniature execution platform inspired by the worker infrastructure behind modern CI systems (e.g., GitHub Actions, CircleCI). It accepts dependency-aware build pipelines (DAGs), schedules tasks across independent workers, isolates execution in ephemeral Docker containers, and recovers interrupted work when workers fail.
 
 The project is intentionally focused on the execution plane: scheduling, worker coordination, durable state, failure recovery, and isolated workloads.
