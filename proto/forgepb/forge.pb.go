@@ -25,6 +25,7 @@ const (
 type RegisterWorkerRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	WorkerId      string                 `protobuf:"bytes,1,opt,name=worker_id,json=workerId,proto3" json:"worker_id,omitempty"`
+	DemoControl   bool                   `protobuf:"varint,2,opt,name=demo_control,json=demoControl,proto3" json:"demo_control,omitempty"` // Explicit opt-in to dashboard failure injection.
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -64,6 +65,13 @@ func (x *RegisterWorkerRequest) GetWorkerId() string {
 		return x.WorkerId
 	}
 	return ""
+}
+
+func (x *RegisterWorkerRequest) GetDemoControl() bool {
+	if x != nil {
+		return x.DemoControl
+	}
+	return false
 }
 
 type RegisterWorkerResponse struct {
@@ -328,7 +336,7 @@ func (x *ReportResultResponse) GetOk() bool {
 	return false
 }
 
-// --- Heartbeat (Stage 5: NEW) ---
+// --- Heartbeat ---
 type HeartbeatRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	WorkerId      string                 `protobuf:"bytes,1,opt,name=worker_id,json=workerId,proto3" json:"worker_id,omitempty"`
@@ -376,6 +384,7 @@ func (x *HeartbeatRequest) GetWorkerId() string {
 type HeartbeatResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Ok            bool                   `protobuf:"varint,1,opt,name=ok,proto3" json:"ok,omitempty"`
+	StopWorker    bool                   `protobuf:"varint,2,opt,name=stop_worker,json=stopWorker,proto3" json:"stop_worker,omitempty"` // Stop without reporting a result; normal leases recover work.
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -417,13 +426,21 @@ func (x *HeartbeatResponse) GetOk() bool {
 	return false
 }
 
+func (x *HeartbeatResponse) GetStopWorker() bool {
+	if x != nil {
+		return x.StopWorker
+	}
+	return false
+}
+
 var File_forge_proto protoreflect.FileDescriptor
 
 const file_forge_proto_rawDesc = "" +
 	"\n" +
-	"\vforge.proto\x12\aforgepb\"4\n" +
+	"\vforge.proto\x12\aforgepb\"W\n" +
 	"\x15RegisterWorkerRequest\x12\x1b\n" +
-	"\tworker_id\x18\x01 \x01(\tR\bworkerId\"(\n" +
+	"\tworker_id\x18\x01 \x01(\tR\bworkerId\x12!\n" +
+	"\fdemo_control\x18\x02 \x01(\bR\vdemoControl\"(\n" +
 	"\x16RegisterWorkerResponse\x12\x0e\n" +
 	"\x02ok\x18\x01 \x01(\bR\x02ok\"-\n" +
 	"\x0eGetTaskRequest\x12\x1b\n" +
@@ -440,9 +457,11 @@ const file_forge_proto_rawDesc = "" +
 	"\x14ReportResultResponse\x12\x0e\n" +
 	"\x02ok\x18\x01 \x01(\bR\x02ok\"/\n" +
 	"\x10HeartbeatRequest\x12\x1b\n" +
-	"\tworker_id\x18\x01 \x01(\tR\bworkerId\"#\n" +
+	"\tworker_id\x18\x01 \x01(\tR\bworkerId\"D\n" +
 	"\x11HeartbeatResponse\x12\x0e\n" +
-	"\x02ok\x18\x01 \x01(\bR\x02ok2\xb0\x02\n" +
+	"\x02ok\x18\x01 \x01(\bR\x02ok\x12\x1f\n" +
+	"\vstop_worker\x18\x02 \x01(\bR\n" +
+	"stopWorker2\xb0\x02\n" +
 	"\fForgeService\x12Q\n" +
 	"\x0eRegisterWorker\x12\x1e.forgepb.RegisterWorkerRequest\x1a\x1f.forgepb.RegisterWorkerResponse\x12<\n" +
 	"\aGetTask\x12\x17.forgepb.GetTaskRequest\x1a\x18.forgepb.GetTaskResponse\x12K\n" +

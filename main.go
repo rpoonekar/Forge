@@ -10,7 +10,7 @@ import (
 	"github.com/ronavpoonekar/forge/worker"
 )
 
-// Legacy in-memory single-process entry point from Stage 1.
+// Legacy single-process entry point.
 // Production multi-worker execution uses cmd/scheduler and cmd/worker.
 func main() {
 	sched := scheduler.New(nil)

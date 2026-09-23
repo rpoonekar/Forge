@@ -11,3 +11,9 @@
 *.out
 # macOS files
 .DS_Store
+# Dashboard dependencies and generated assets
+web/node_modules/
+web/dist/
+
+# Local planning and implementation notes
+/docs/

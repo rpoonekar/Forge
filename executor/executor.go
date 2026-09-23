@@ -8,6 +8,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/image"
@@ -92,7 +93,13 @@ func (e *DockerExecutor) Run(ctx context.Context, command string) (*Result, erro
 	}
 
 	// Ensure container is always cleaned up even if start or wait fails
-	defer e.cli.ContainerRemove(ctx, resp.ID, container.RemoveOptions{})
+	defer func() {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := e.cli.ContainerRemove(cleanupCtx, resp.ID, container.RemoveOptions{Force: true}); err != nil {
+			log.Printf("Failed to remove task container %s: %v", resp.ID, err)
+		}
+	}()
 
 	err = e.cli.ContainerStart(ctx, resp.ID, container.StartOptions{})
 	if err != nil {
@@ -102,6 +109,8 @@ func (e *DockerExecutor) Run(ctx context.Context, command string) (*Result, erro
 	statusCh, errCh := e.cli.ContainerWait(ctx, resp.ID, container.WaitConditionNotRunning)
 	var exitCode int
 	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
 	case err := <-errCh:
 		return nil, fmt.Errorf("failed while waiting for container %s: %w", resp.ID, err)
 	case status := <-statusCh:

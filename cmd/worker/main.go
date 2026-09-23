@@ -20,6 +20,7 @@ func main() {
 	workerID := flag.String("id", "worker-1", "unique ID for this worker")
 	schedulerAddr := flag.String("addr", "localhost:50051", "scheduler gRPC address")
 	imageName := flag.String("image", "alpine:latest", "Docker image for task execution")
+	demoControl := flag.Bool("demo-control", false, "allow the dashboard to interrupt this worker for a failure demo")
 	flag.Parse()
 
 	// 1. Create the Docker executor
@@ -42,7 +43,7 @@ func main() {
 	client := forgepb.NewForgeServiceClient(conn)
 
 	// 3. Register worker with scheduler
-	response, err := client.RegisterWorker(context.Background(), &forgepb.RegisterWorkerRequest{WorkerId: *workerID})
+	response, err := client.RegisterWorker(context.Background(), &forgepb.RegisterWorkerRequest{WorkerId: *workerID, DemoControl: *demoControl})
 	if err != nil || !response.Ok {
 		log.Fatalf("Failed to register worker: %v", err)
 	}
@@ -60,9 +61,13 @@ func main() {
 		for {
 			select {
 			case <-ticker.C:
-				_, err := client.Heartbeat(ctx, &forgepb.HeartbeatRequest{WorkerId: *workerID})
+				reply, err := client.Heartbeat(ctx, &forgepb.HeartbeatRequest{WorkerId: *workerID})
 				if err != nil {
 					log.Printf("[%s] Heartbeat failed: %v", *workerID, err)
+				} else if reply.StopWorker && *demoControl {
+					log.Printf("[%s] Dashboard requested failure injection; stopping without reporting a result", *workerID)
+					cancel()
+					return
 				}
 			case <-ctx.Done():
 				log.Printf("[%s] Heartbeat stopped", *workerID)
@@ -97,6 +102,9 @@ func main() {
 		log.Printf("[%s] Executing task %s in container: %s", *workerID, resp.TaskId, resp.Command)
 
 		result, err := dockerExec.Run(ctx, resp.Command)
+		if ctx.Err() != nil {
+			return
+		}
 		if err != nil {
 			log.Printf("[%s] Failed to execute task: %v", *workerID, err)
 			result = &executor.Result{Output: err.Error(), ExitCode: 1}

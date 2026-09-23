@@ -6,6 +6,10 @@ Forge is a miniature execution platform inspired by the worker infrastructure be
 
 The project is intentionally focused on the execution plane: scheduling, worker coordination, durable state, failure recovery, and isolated workloads.
 
+Interact with Forge through the [browser dashboard](#quick-start) or the
+[HTTP API from your terminal](#optional-submit-workloads-through-the-api).
+Both use the same scheduler, workers, and PostgreSQL database.
+
 ## Why Forge
 
 CI systems must coordinate unreliable workers without losing work. Forge explores that problem with a deliberately small, inspectable architecture:
@@ -14,13 +18,14 @@ CI systems must coordinate unreliable workers without losing work. Forge explore
 - **PostgreSQL-backed state** keeps task, build, and worker state durable across scheduler restarts.
 - **Lease-based failure detection** identifies workers that stop heartbeating and reassigns their in-flight work with exponential backoff.
 - **Ephemeral Docker containers** isolate commands, capture stdout/stderr, and make task environments reproducible.
+- **Live React dashboard** submits demo and custom builds, visualizes dependency graphs, inspects task output, and demonstrates recovery with an opt-in worker interruption control.
 - **Dynamic DAG scheduling** runs tasks in parallel waves, unlocking downstream tasks only after dependencies succeed, while rejecting cyclic build definitions.
 
 ## Architecture
 
 ```text
-                         HTTP (REST)
-   Client ─────────────────────────────────────────────┐
+                         HTTP (REST + WebSocket)
+   Browser ─────────────────────────────────────────────┐
                                                        v
                                              ┌──────────────────┐
                                              │   Go Scheduler   │
@@ -77,9 +82,14 @@ start ─┤          ├─▶ compile ──▶ deploy
 
 ## Quick Start
 
+Run the commands below from the `forge/` repository root. Start PostgreSQL and
+Docker Desktop first. The scheduler serves the dashboard itself, so normal use
+does not require a separate frontend server.
+
 ### Prerequisites
 
-- **Go** (1.22+)
+- **Go** matching `go.mod` (currently 1.27.1)
+- **Node.js** 22.12+ (22 LTS) or 24+ and npm (only needed for the dashboard)
 - **PostgreSQL** running locally (`postgres://localhost:5432/forge`)
 - **Docker Desktop** running locally (Apple Silicon or Intel)
 - Pull the base execution image:
@@ -89,32 +99,105 @@ start ─┤          ├─▶ compile ──▶ deploy
 
 ### 1. Initialize the Database
 
+For a new installation, create the database once:
+
 ```bash
 createdb forge
+```
+
+Apply the schema to your local `forge` database:
+
+```bash
 psql forge < db/schema.sql
 ```
 
-### 2. Start the Scheduler
+If the `forge` database already exists, skip `createdb` and run only the schema command.
+It preserves existing builds, tasks, and workers, and adds the two queue-timing
+columns. Apply this update even if you plan to use only the HTTP API.
+
+### 2. Build the Dashboard
 
 ```bash
-go run ./cmd/scheduler
+cd web
+npm ci
+npm run build
+cd ..
 ```
 
-The scheduler exposes a REST API on `:8080` and a gRPC server on `:50051`.
+Do this on first setup and rebuild after frontend changes. If you only want the
+HTTP API, skip this step; the scheduler and workers run without dashboard assets.
 
-### 3. Start Workers
+### 3. Start the Scheduler
 
-Run each worker in a separate terminal:
+In **Terminal 1**, from the repository root:
 
 ```bash
-# Terminal 2
-go run ./cmd/worker --id worker-1 --image alpine:latest
-
-# Terminal 3
-go run ./cmd/worker --id worker-2 --image alpine:latest
+go run ./cmd/scheduler --demo-controls
 ```
 
-### 4. Submit Workload
+Open **http://127.0.0.1:8080**. The scheduler serves the built dashboard and REST /
+WebSocket API on `127.0.0.1:8080`, and gRPC on `127.0.0.1:50051`.
+`--demo-controls` enables the worker interruption button; omit it to disable that control.
+
+Set `DATABASE_URL` to use a different database. `--http`, `--grpc`, and `--web-dir`
+can override the listen addresses and dashboard asset directory. Run these commands
+from the repository root.
+
+### 4. Start Workers
+
+Open two more terminals and change to the same repository root in each.
+In **Terminal 2**:
+
+```bash
+go run ./cmd/worker --id worker-1 --image alpine:latest --demo-control
+```
+
+In **Terminal 3**:
+
+```bash
+go run ./cmd/worker --id worker-2 --image alpine:latest --demo-control
+```
+
+Leave all three terminals running. Two workers let one recover work after the
+other is interrupted. Omit `--demo-control` for workers you do not want the
+dashboard to stop.
+
+### 5. Use the Dashboard
+
+Open **[http://127.0.0.1:8080](http://127.0.0.1:8080)** in your browser.
+
+- **Submit demo build** runs a dependency pipeline, a deliberately failing pipeline,
+  or 20 parallel tasks. Select a workload from the dropdown.
+- **New build** lets you enter task names, commands, and dependencies without curl.
+- Select a build and then a task to inspect its worker, latest attempt duration,
+  retry count, command, and captured output.
+- **Workers** shows availability, current tasks, last heartbeats, and completed counts.
+- While `lint` and `test` are running, click **Kill random worker**. The scheduler
+  prefers a busy, responsive worker that opted in with `--demo-control`. It stops on
+  its next heartbeat, then the real lease checker detects the failure and recovers
+  the task on a surviving worker. Allow roughly 15–30 seconds for detection and backoff.
+  Restart the stopped worker with its original command to bring it back.
+
+Task status updates are live; output is collected after execution completes.
+Starting the services still happens in terminals, but submitting and inspecting
+builds and running the failure demo now happen in the browser.
+
+### Starting Again and Shutting Down
+
+On subsequent launches, start PostgreSQL and Docker Desktop, then repeat the
+scheduler and worker commands in steps 3–4. You do not need to recreate the
+database, reapply the schema, or rebuild an unchanged dashboard.
+
+To shut down Forge, press **Ctrl+C** in each worker terminal and then in the
+scheduler terminal. Close the dashboard tab. PostgreSQL and Docker Desktop are
+separate services; stop them separately if you are finished using them.
+
+### Optional: Submit Workloads Through the API
+
+The original API remains available whether or not you build or open the dashboard.
+Complete database setup and start the scheduler and workers as above; the demo
+flags can be omitted for ordinary API use. The examples below use `curl` and,
+where shown, `jq` to format responses.
 
 #### Option A: Submit a Single Standalone Task
 ```bash
@@ -148,7 +231,7 @@ curl -i -X POST http://localhost:8080/build \
 ```
 *(Returns `HTTP/1.1 400 Bad Request: Invalid build DAG: cycle detected in task dependencies`)*
 
-### 5. Inspect the System
+### Optional: Inspect Through the API
 
 ```bash
 # View all tasks and their outputs
@@ -167,8 +250,9 @@ curl -s http://localhost:8080/workers | jq .
 ## Project Structure
 
 ```text
+api/               REST routes, demo workloads, and bounded WebSocket broadcast hub
 cmd/
-  scheduler/       Scheduler entry point, REST API, and gRPC server
+  scheduler/       Scheduler entry point and HTTP / gRPC server lifecycle
   worker/          Worker entry point, registration, and heartbeat loop
 dag/               DAG validation (Kahn's algorithm), cycle detection, and runtime resolution
 db/                PostgreSQL unified schema (schema.sql)
@@ -176,7 +260,8 @@ executor/          Docker container lifecycle (create, start, wait, log demux, r
 model/             Task, worker, build, and pipeline data models
 proto/             Protocol Buffer definitions and generated gRPC stubs
 scheduler/         Task scheduler, lease checker, retry policy, and failure recovery
-store/             PostgreSQL persistence layer
+store/             PostgreSQL persistence and consistent dashboard snapshots
+web/               React / TypeScript UI (Vite) and components
 ```
 
 ## Design Decisions
@@ -200,6 +285,20 @@ go test ./...
 go vet ./...
 ```
 
+For UI development, keep the scheduler running on port 8080 and run:
+
+```bash
+cd web
+npm ci
+npm run dev
+```
+
+Open the Vite URL printed in the terminal. Vite proxies `/api` and WebSocket traffic
+to the scheduler; no cross-origin configuration is needed. Rebuild `web/dist` when
+returning to the Go-served dashboard.
+
+Build and type-check the frontend with `cd web && npm run build`.
+
 ## Roadmap
 
 - [x] Concurrent worker registration and gRPC coordination
@@ -207,5 +306,5 @@ go vet ./...
 - [x] Heartbeats, lease expiry, automatic reassignment, and retry backoff
 - [x] Ephemeral Docker task execution
 - [x] Dependency DAG scheduling, cycle detection, and dynamic unlocking
-- [ ] Live build dashboard and WebSocket updates
+- [x] Live React / TypeScript dashboard, WebSocket updates, and worker failure demo
 - [ ] Prometheus metrics, load testing, and graceful shutdown hardening

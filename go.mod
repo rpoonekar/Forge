@@ -5,6 +5,7 @@ go 1.27.1
 require (
 	github.com/docker/docker v27.1.1+incompatible
 	github.com/google/uuid v1.6.0
+	github.com/gorilla/websocket v1.5.3
 	github.com/lib/pq v1.12.3
 	google.golang.org/grpc v1.83.2
 	google.golang.org/protobuf v1.36.12

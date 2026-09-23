@@ -3,6 +3,7 @@ package scheduler
 import (
 	"context"
 	"log"
+	"sync"
 	"time"
 
 	"github.com/ronavpoonekar/forge/dag"
@@ -12,13 +13,20 @@ import (
 
 // Scheduler manages task scheduling, worker coordination, and pipeline execution.
 type Scheduler struct {
-	store *store.Store
+	store       *store.Store
+	changes     chan struct{}
+	controlMu   sync.RWMutex
+	demoWorkers map[string]bool
+	stopping    map[string]bool
 }
 
 // New creates a new Scheduler backed by the PostgreSQL store.
 func New(st *store.Store) *Scheduler {
 	return &Scheduler{
-		store: st,
+		store:       st,
+		changes:     make(chan struct{}, 1),
+		demoWorkers: make(map[string]bool),
+		stopping:    make(map[string]bool),
 	}
 }
 
@@ -55,11 +63,16 @@ func (s *Scheduler) StartLeaseChecker(ctx context.Context, checkInterval, timeou
 						s.store.RetryTask(task.ID, delay)
 					} else {
 						log.Printf("Task %s permanently FAILED (max retries %d exceeded)", task.ID, task.MaxRetries)
-						s.store.FailTaskPermanently(task.ID)
+						if err := s.store.FailTaskPermanently(task.ID); err == nil {
+							if full, _ := s.store.GetTask(task.ID); full != nil && full.BuildID != "" {
+								s.resolveBuildDependencies(full.BuildID, task.ID, 1)
+							}
+						}
 					}
 				}
 
 				s.store.UpdateWorkerStatus(worker.ID, model.WorkerStatusOffline, "", 0)
+				s.Notify()
 			}
 		case <-ctx.Done():
 			log.Println("Lease checker stopped")
@@ -78,6 +91,7 @@ func (s *Scheduler) RegisterWorker(workerID string) *model.Worker {
 }
 
 func (s *Scheduler) Submit(command string) *model.Task {
+	defer s.Notify()
 	task, err := s.store.CreateTask(command)
 	if err != nil {
 		log.Printf("Error creating task: %v", err)
@@ -88,6 +102,7 @@ func (s *Scheduler) Submit(command string) *model.Task {
 
 // SubmitBuild validates the DAG dependencies and schedules a multi-task build.
 func (s *Scheduler) SubmitBuild(tasks []model.TaskSpec) (*model.Build, error) {
+	defer s.Notify()
 	if _, err := dag.Validate(tasks); err != nil {
 		return nil, err
 	}
@@ -119,6 +134,8 @@ func (s *Scheduler) NextTask(workerID string) *model.Task {
 
 	if task != nil {
 		s.store.UpdateWorkerStatus(workerID, model.WorkerStatusBusy, task.ID, 0)
+		s.store.UpdateBuildStatus(task.ID)
+		s.Notify()
 	} else {
 		s.store.UpdateWorkerStatus(workerID, model.WorkerStatusIdle, "", 0)
 	}
@@ -127,8 +144,10 @@ func (s *Scheduler) NextTask(workerID string) *model.Task {
 }
 
 func (s *Scheduler) CompleteTask(taskID string, workerID string, output string, exitCode int) {
-	if err := s.store.CompleteTask(taskID, output, exitCode); err != nil {
+	defer s.Notify()
+	if err := s.store.CompleteTask(taskID, workerID, output, exitCode); err != nil {
 		log.Printf("Error completing task %s: %v", taskID, err)
+		return
 	}
 	if err := s.store.UpdateWorkerStatus(workerID, model.WorkerStatusIdle, "", 1); err != nil {
 		log.Printf("Error updating worker %s: %v", workerID, err)

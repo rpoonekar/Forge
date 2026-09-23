@@ -14,12 +14,15 @@ service ForgeService {
   rpc GetTask(GetTaskRequest) returns (GetTaskResponse);
   rpc ReportResult(ReportResultRequest) returns (ReportResultResponse);
 
-  // Stage 5: NEW — workers call this every few seconds to say "I'm alive"
+  // Workers periodically send heartbeats to renew their leases.
   rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse);
 }
 
 // --- RegisterWorker ---
-message RegisterWorkerRequest { string worker_id = 1; }
+message RegisterWorkerRequest {
+  string worker_id = 1;
+  bool demo_control = 2; // Explicit opt-in to dashboard failure injection.
+}
 message RegisterWorkerResponse { bool ok = 1; }
 
 // --- GetTask ---
@@ -39,10 +42,11 @@ message ReportResultRequest {
 }
 message ReportResultResponse { bool ok = 1; }
 
-// --- Heartbeat (Stage 5: NEW) ---
+// --- Heartbeat ---
 message HeartbeatRequest {
   string worker_id = 1;
 }
 message HeartbeatResponse {
   bool ok = 1;
+  bool stop_worker = 2; // Stop without reporting a result; normal leases recover work.
 }

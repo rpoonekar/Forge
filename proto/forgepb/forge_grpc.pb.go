@@ -32,7 +32,7 @@ type ForgeServiceClient interface {
 	RegisterWorker(ctx context.Context, in *RegisterWorkerRequest, opts ...grpc.CallOption) (*RegisterWorkerResponse, error)
 	GetTask(ctx context.Context, in *GetTaskRequest, opts ...grpc.CallOption) (*GetTaskResponse, error)
 	ReportResult(ctx context.Context, in *ReportResultRequest, opts ...grpc.CallOption) (*ReportResultResponse, error)
-	// Stage 5: NEW — workers call this every few seconds to say "I'm alive"
+	// Workers periodically send heartbeats to renew their leases.
 	Heartbeat(ctx context.Context, in *HeartbeatRequest, opts ...grpc.CallOption) (*HeartbeatResponse, error)
 }
 
@@ -91,7 +91,7 @@ type ForgeServiceServer interface {
 	RegisterWorker(context.Context, *RegisterWorkerRequest) (*RegisterWorkerResponse, error)
 	GetTask(context.Context, *GetTaskRequest) (*GetTaskResponse, error)
 	ReportResult(context.Context, *ReportResultRequest) (*ReportResultResponse, error)
-	// Stage 5: NEW — workers call this every few seconds to say "I'm alive"
+	// Workers periodically send heartbeats to renew their leases.
 	Heartbeat(context.Context, *HeartbeatRequest) (*HeartbeatResponse, error)
 	mustEmbedUnimplementedForgeServiceServer()
 }

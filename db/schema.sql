@@ -51,3 +51,8 @@ CREATE TABLE IF NOT EXISTS workers (
 CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
 CREATE INDEX IF NOT EXISTS idx_tasks_build_id ON tasks(build_id);
 CREATE INDEX IF NOT EXISTS idx_task_deps_parent ON task_dependencies(parent_id);
+
+-- Dashboard queue timing. Re-running schema.sql upgrades existing databases.
+-- Historical rows remain NULL rather than inventing queue latency samples.
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS queued_at TIMESTAMPTZ;
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS scheduling_latency_ms DOUBLE PRECISION;

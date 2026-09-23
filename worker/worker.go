@@ -8,7 +8,7 @@ import (
 )
 
 // Worker pulls tasks from the scheduler and executes them directly on host.
-// (Legacy Stage 1 implementation; current workers use Docker in executor/executor.go).
+// Legacy implementation; current workers use Docker in executor/executor.go.
 type Worker struct {
 	id        string
 	scheduler *scheduler.Scheduler

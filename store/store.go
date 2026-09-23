@@ -45,8 +45,8 @@ func (s *Store) CreateTask(command string) (*model.Task, error) {
 	status := model.StatusQueued
 	maxRetries := model.DefaultMaxRetries
 
-	query := `INSERT INTO tasks (id, command, status, created_at, max_retries)
-	          VALUES ($1, $2, $3, $4, $5)`
+	query := `INSERT INTO tasks (id, command, status, created_at, max_retries, queued_at)
+	          VALUES ($1, $2, $3, $4, $5, $4)`
 	_, err := s.db.Exec(query, id, command, status, createdAt, maxRetries)
 	if err != nil {
 		return nil, err
@@ -164,7 +164,8 @@ func (s *Store) AssignNextTask(workerID string) (*model.Task, error) {
 			FOR UPDATE SKIP LOCKED
 		)
 		UPDATE tasks
-		SET status = 'RUNNING', worker_id = $1, started_at = $2
+		SET status = 'RUNNING', worker_id = $1, started_at = $2,
+            scheduling_latency_ms = CASE WHEN queued_at IS NOT NULL THEN GREATEST(0, EXTRACT(EPOCH FROM ($2::timestamptz - queued_at)) * 1000) END
 		FROM next_task
 		WHERE tasks.id = next_task.id
 		RETURNING tasks.id, tasks.build_id, tasks.name, tasks.command, tasks.status,
@@ -208,7 +209,7 @@ func (s *Store) AssignNextTask(workerID string) (*model.Task, error) {
 }
 
 // CompleteTask updates a task's status, output, and exit code.
-func (s *Store) CompleteTask(taskID string, output string, exitCode int) error {
+func (s *Store) CompleteTask(taskID string, workerID string, output string, exitCode int) error {
 	var status model.Status
 	if exitCode == 0 {
 		status = model.StatusSucceeded
@@ -218,8 +219,15 @@ func (s *Store) CompleteTask(taskID string, output string, exitCode int) error {
 
 	query := `UPDATE tasks
 	          SET status = $1, output = $2, exit_code = $3, ended_at = $4
-	          WHERE id = $5`
-	_, err := s.db.Exec(query, status, output, exitCode, time.Now(), taskID)
+	          WHERE id = $5 AND worker_id = $6 AND status = 'RUNNING'`
+	result, err := s.db.Exec(query, status, output, exitCode, time.Now(), taskID, workerID)
+	if err != nil {
+		return err
+	}
+	n, err := result.RowsAffected()
+	if err == nil && n == 0 {
+		return fmt.Errorf("task is no longer assigned to worker %s", workerID)
+	}
 	return err
 }
 
@@ -251,7 +259,9 @@ func (s *Store) RegisterWorker(workerID string) (*model.Worker, error) {
 // UpdateWorkerStatus updates a worker's status, current task, and last_seen timestamp.
 func (s *Store) UpdateWorkerStatus(workerID string, status model.WorkerStatus, currentTask string, tasksRunDelta int) error {
 	query := `UPDATE workers
-	          SET status = $1, current_task = $2, last_seen = $3, tasks_run = tasks_run + $4
+	          SET status = $1, current_task = $2,
+	              last_seen = CASE WHEN $1 = 'OFFLINE' THEN last_seen ELSE $3 END,
+	              tasks_run = tasks_run + $4
 	          WHERE id = $5`
 	_, err := s.db.Exec(query, status, currentTask, time.Now(), tasksRunDelta, workerID)
 	return err
@@ -349,7 +359,7 @@ func (s *Store) GetRunningTasksForWorker(workerID string) ([]*model.Task, error)
 func (s *Store) RetryTask(taskID string, retryDelay time.Duration) error {
 	query := `UPDATE tasks
 	          SET status = 'QUEUED', worker_id = '', started_at = NULL,
-	              retry_count = retry_count + 1, next_retry_at = $1
+	              retry_count = retry_count + 1, next_retry_at = $1, queued_at = $1, scheduling_latency_ms = NULL
 	          WHERE id = $2`
 	_, err := s.db.Exec(query, time.Now().Add(retryDelay), taskID)
 	return err
@@ -357,7 +367,7 @@ func (s *Store) RetryTask(taskID string, retryDelay time.Duration) error {
 
 // FailTaskPermanently marks a task as permanently FAILED when max retries is exceeded.
 func (s *Store) FailTaskPermanently(taskID string) error {
-	query := `UPDATE tasks SET status = 'FAILED', ended_at = $1 WHERE id = $2`
+	query := `UPDATE tasks SET status = 'FAILED', ended_at = $1, exit_code = -1, output = 'Worker lease expired; maximum retries exceeded.' WHERE id = $2`
 	_, err := s.db.Exec(query, time.Now(), taskID)
 	return err
 }
@@ -395,20 +405,11 @@ func (s *Store) CreateBuild(tasks []model.TaskSpec) (*model.Build, error) {
 			initialStatus = model.StatusBlocked
 		}
 
-		_, err := tx.Exec(`INSERT INTO tasks (id, build_id, name, command, status, created_at, max_retries)
-			VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+		_, err := tx.Exec(`INSERT INTO tasks (id, build_id, name, command, status, created_at, max_retries, queued_at)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, CASE WHEN $5 = 'QUEUED' THEN $6::timestamptz ELSE NULL END)`,
 			taskID, buildID, spec.Name, spec.Command, initialStatus, now, model.DefaultMaxRetries)
 		if err != nil {
 			return nil, fmt.Errorf("failed to insert task %s: %w", spec.Name, err)
-		}
-
-		for _, depName := range spec.DependsOn {
-			parentID := nameToID[depName]
-			_, err := tx.Exec(`INSERT INTO task_dependencies (task_id, parent_id) VALUES ($1, $2)`,
-				taskID, parentID)
-			if err != nil {
-				return nil, fmt.Errorf("failed to insert task dependency: %w", err)
-			}
 		}
 
 		createdTasks = append(createdTasks, &model.Task{
@@ -420,6 +421,15 @@ func (s *Store) CreateBuild(tasks []model.TaskSpec) (*model.Build, error) {
 			CreatedAt:  now,
 			MaxRetries: model.DefaultMaxRetries,
 		})
+	}
+
+	// Insert edges after every task exists; submitted specs need not be topologically ordered.
+	for _, spec := range tasks {
+		for _, depName := range spec.DependsOn {
+			if _, err := tx.Exec(`INSERT INTO task_dependencies (task_id, parent_id) VALUES ($1, $2)`, nameToID[spec.Name], nameToID[depName]); err != nil {
+				return nil, fmt.Errorf("failed to insert task dependency: %w", err)
+			}
+		}
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -545,7 +555,7 @@ func (s *Store) SetTasksStatus(taskIDs []string, status model.Status) error {
 		if status == model.StatusCanceled || status == model.StatusFailed || status == model.StatusSucceeded {
 			endedAt = sql.NullTime{Time: time.Now(), Valid: true}
 		}
-		_, err := s.db.Exec("UPDATE tasks SET status = $1, ended_at = COALESCE($2, ended_at) WHERE id = $3", status, endedAt, id)
+		_, err := s.db.Exec("UPDATE tasks SET status = $1, ended_at = COALESCE($2, ended_at), queued_at = CASE WHEN $1 = 'QUEUED' THEN NOW() ELSE queued_at END WHERE id = $3", status, endedAt, id)
 		if err != nil {
 			return err
 		}
